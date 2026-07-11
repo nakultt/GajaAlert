@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gaja Edge - Snapdragon Hybrid LLM Playground</title>
+    <meta name="description" content="Interactive playground to test and benchmark Gemma 4 inference across Snapdragon NPU (HTP), Adreno GPU (OpenCL), and CPU.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --panel-bg: rgba(17, 20, 28, 0.65);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f1f3f7;
+            --text-secondary: #9ea5b4;
+            --cyan-glow: #00f2fe;
+            --blue-glow: #4facfe;
+            --npu-accent: #ff007f;
+            --cpu-accent: #8a2be2;
+            --accent-gradient: linear-gradient(135deg, var(--cyan-glow) 0%, var(--blue-glow) 100%);
+            --user-bubble: linear-gradient(135deg, #1f2a3d 0%, #151e2b 100%);
+            --model-bubble: linear-gradient(135deg, #121f30 0%, #0d1622 100%);
+            --success-color: #10b981;
+            --error-color: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            background-image: 
+                radial-gradient(circle at 5% 15%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 95% 85%, rgba(255, 0, 127, 0.05) 0%, transparent 45%),
+                radial-gradient(circle at 50% 50%, rgba(79, 172, 254, 0.02) 0%, transparent 60%);
+        }
+
+        #app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Sidebar Dashboard */
+        #sidebar {
+            width: 360px;
+            background-color: var(--panel-bg);
+            border-right: 1px solid var(--border-color);
+            backdrop-filter: blur(30px);
+            padding: 28px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 8px;
+        }
+
+        .logo-icon {
+            width: 38px;
+            height: 38px;
+            background: var(--accent-gradient);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            color: #000;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 18px;
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.4);
+            transition: transform 0.3s ease;
+        }
+
+        .logo-container:hover .logo-icon {
+            transform: rotate(10deg);
+        }
+
+        .logo-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-header {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-header::before {
+            content: '';
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--cyan-glow);
+            box-shadow: 0 0 10px var(--cyan-glow);
+        }
+
+        .card-header.npu::before {
+            background-color: var(--npu-accent);
+            box-shadow: 0 0 10px var(--npu-accent);
+        }
+
+        /* Target Selectors */
+        .port-option {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .port-option:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .port-option.active {
+            border-color: var(--cyan-glow);
+            background: rgba(0, 242, 254, 0.04);
+            box-shadow: inset 0 0 10px rgba(0, 242, 254, 0.05);
+        }
+
+        .port-option.active.npu-only {
+            border-color: var(--npu-accent);
+            background: rgba(255, 0, 127, 0.04);
+        }
+
+        .port-option.active.cpu-only {
+            border-color: var(--cpu-accent);
+            background: rgba(138, 43, 226, 0.04);
+        }
+
+        .port-details {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .port-name {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .port-desc {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #4b5563;
+        }
+
+        .status-dot.online {
+            background-color: var(--success-color);
+            box-shadow: 0 0 8px var(--success-color);
+            animation: pulse-green 2s infinite;
+        }
+
+        .status-dot.offline {
+            background-color: var(--error-color);
+            box-shadow: 0 0 8px var(--error-color);
+        }
+
+        @keyframes pulse-green {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+
+        /* Hardware Layers Visual Grid */
+        .layer-grid {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            gap: 4px;
+            margin-top: 6px;
+        }
+
+        .layer-box {
+            aspect-ratio: 1;
+            border-radius: 3px;
+            font-size: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: rgba(255, 255, 255, 0.25);
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .layer-box.npu-layer {
+            background: rgba(255, 0, 127, 0.15);
+            border-color: rgba(255, 0, 127, 0.3);
+            color: var(--npu-accent);
+        }
+
+        .layer-box.gpu-layer {
+            background: rgba(0, 242, 254, 0.12);
+            border-color: rgba(0, 242, 254, 0.25);
+            color: var(--cyan-glow);
+        }
+
+        .layer-box.cpu-layer {
+            background: rgba(138, 43, 226, 0.12);
+            border-color: rgba(138, 43, 226, 0.25);
+            color: #b366ff;
+        }
+
+        .layer-box.active-process {
+            transform: scale(1.15);
+            z-index: 2;
+            box-shadow: 0 0 12px currentColor;
+            color: #fff !important;
+        }
+
+        .layer-legend {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        /* Telemetry Info */
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+        }
+
+        .stat-value {
+            font-weight: 600;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .stat-value.highlight-cyan {
+            color: var(--cyan-glow);
+            text-shadow: 0 0 8px rgba(0, 242, 254, 0.3);
+        }
+
+        .speedometer-container {
+            position: relative;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .speedometer-bar {
+            height: 100%;
+            width: 0%;
+            background: var(--accent-gradient);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        /* Chat Area */
+        #chat-area {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(10, 11, 14, 0.3);
+            position: relative;
+        }
+
+        #chat-header {
+            height: 80px;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: rgba(17, 20, 28, 0.45);
+            backdrop-filter: blur(15px);
+            z-index: 10;
+        }
+
+        .header-title-container {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .header-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .header-pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--cyan-glow);
+            box-shadow: 0 0 10px var(--cyan-glow);
+            animation: pulse-dot 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(0.85); opacity: 0.5; }
+            50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 15px var(--cyan-glow); }
+        }
+
+        /* Messages */
+        #messages-container {
+            flex-grow: 1;
+            padding: 32px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .message-row {
+            display: flex;
+            width: 100%;
+        }
+
+        .msg-user {
+            justify-content: flex-end;
+        }
+
+        .msg-model {
+            justify-content: flex-start;
+        }
+
+        .bubble {
+            max-width: 75%;
+            padding: 18px 22px;
+            border-radius: 18px;
+            font-size: 15px;
+            line-height: 1.6;
+            letter-spacing: 0.1px;
+            animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            word-wrap: break-word;
+            position: relative;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .bubble-user {
+            background: var(--user-bubble);
+            border-bottom-right-radius: 4px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .bubble-model {
+            background: var(--model-bubble);
+            border-bottom-left-radius: 4px;
+            color: var(--text-primary);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Markdown elements formatting */
+        .bubble-model p {
+            margin-bottom: 12px;
+        }
+        .bubble-model p:last-child {
+            margin-bottom: 0;
+        }
+
+        .bubble-model strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .bubble-model code {
+            font-family: 'Space Grotesk', monospace;
+            background: rgba(255, 255, 255, 0.06);
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .bubble-model pre {
+            background: rgba(5, 6, 8, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 14px;
+            overflow-x: auto;
+            margin: 12px 0;
+        }
+
+        .bubble-model pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            font-size: 13px;
+            color: #e5c77b;
+        }
+
+        /* Preset Cards Grid */
+        #presets-container {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            max-width: 800px;
+            margin: auto;
+            width: 100%;
+        }
+
+        .presets-title {
+            text-align: center;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .presets-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .preset-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+Text-align: left;
+        }
+
+        .preset-card:hover {
+            transform: translateY(-4px);
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(0, 242, 254, 0.3);
+            box-shadow: 0 10px 25px rgba(0, 242, 254, 0.05);
+        }
+
+        .preset-header {
+            font-weight: 700;
+            font-size: 15px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .preset-header svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--cyan-glow);
+        }
+
+        .preset-body {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 16px;
+        }
+
+        .typing-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background-color: var(--cyan-glow);
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+
+        /* Input panel */
+        #input-container {
+            padding: 24px 32px;
+            border-top: 1px solid var(--border-color);
+            background-color: rgba(17, 20, 28, 0.45);
+            backdrop-filter: blur(15px);
+            z-index: 10;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 16px;
+            max-width: 960px;
+            margin: 0 auto;
+            align-items: flex-end;
+        }
+
+        textarea {
+            flex-grow: 1;
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 15px 18px;
+            color: var(--text-primary);
+            font-size: 15px;
+            resize: none;
+            height: 52px;
+            max-height: 200px;
+            outline: none;
+            transition: all 0.3s ease;
+            line-height: 1.5;
+        }
+
+        textarea:focus {
+            border-color: rgba(0, 242, 254, 0.4);
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.08);
+            background-color: rgba(255, 255, 255, 0.04);
+        }
+
+        .action-btn {
+            background: var(--accent-gradient);
+            border: none;
+            border-radius: 14px;
+            width: 52px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+            flex-shrink: 0;
+        }
+
+        .action-btn:hover {
+            transform: scale(1.04);
+            box-shadow: 0 0 22px rgba(0, 242, 254, 0.45);
+        }
+
+        .action-btn:active {
+            transform: scale(0.96);
+        }
+
+        .action-btn svg {
+            width: 22px;
+            height: 22px;
+            fill: #0b0c10;
+        }
+
+        .action-btn:disabled {
+            background: #27272a;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        .action-btn:disabled svg {
+            fill: #71717a;
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <!-- Sidebar Controls & Telemetry -->
+        <aside id="sidebar">
+            <div class="logo-container">
+                <div class="logo-icon">G4</div>
+                <div class="logo-title">Gaja Edge</div>
+            </div>
+
+            <!-- Model Server Selection -->
+            <div class="card">
+                <div class="card-header">Select Model Server</div>
+                
+                <!-- Port 8082: Split -->
+                <div class="port-option active" id="port-option-8082" onclick="switchPort(8082)">
+                    <div class="port-details">
+                        <span class="port-name">Gemma 4 Split (Port :8082)</span>
+                        <span class="port-desc">Hybrid NPU (0-16) + GPU (17-35)</span>
+                    </div>
+                    <div class="status-dot" id="dot-8082"></div>
+                </div>
+
+                <!-- Port 8081: NPU Only -->
+                <div class="port-option npu-only" id="port-option-8081" onclick="switchPort(8081)">
+                    <div class="port-details">
+                        <span class="port-name">Gemma 4 NPU (Port :8081)</span>
+                        <span class="port-desc">Pure Hexagon Accelerator</span>
+                    </div>
+                    <div class="status-dot" id="dot-8081"></div>
+                </div>
+
+                <!-- Port 8080: CPU / llama.cpp -->
+                <div class="port-option cpu-only" id="port-option-8080" onclick="switchPort(8080)">
+                    <div class="port-details">
+                        <span class="port-name">Gemma 4 CPU (Port :8080)</span>
+                        <span class="port-desc">llama.cpp E4B (CPU, Vision)</span>
+                    </div>
+                    <div class="status-dot" id="dot-8080"></div>
+                </div>
+            </div>
+
+            <!-- Hardware Pipeline Layout Visualizer -->
+            <div class="card">
+                <div class="card-header" id="pipeline-header">Hardware Pipeline Layout</div>
+                <div class="layer-grid" id="layer-grid">
+                    <!-- Javascript will generate the 36 layer blocks here -->
+                </div>
+                <div class="layer-legend">
+                    <div class="legend-item">
+                        <div class="legend-indicator" style="background-color: var(--npu-accent);"></div>
+                        <span>NPU</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-indicator" style="background-color: var(--cyan-glow);"></div>
+                        <span>GPU</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-indicator" style="background-color: var(--cpu-accent);"></div>
+                        <span>CPU</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Performance Telemetry Dashboard -->
+            <div class="card">
+                <div class="card-header">Performance Telemetry</div>
+                
+                <div class="stat-row">
+                    <span class="stat-label">Inference Engine:</span>
+                    <span class="stat-value" id="stat-engine">-</span>
+                </div>
+                
+                <div class="stat-row">
+                    <span class="stat-label">Device Map:</span>
+                    <span class="stat-value" id="stat-device">-</span>
+                </div>
+
+                <div class="stat-row">
+                    <span class="stat-label">Response Time:</span>
+                    <span class="stat-value highlight-cyan" id="stat-latency">-</span>
+                </div>
+
+                <div class="stat-row">
+                    <span class="stat-label">Token Speed:</span>
+                    <span class="stat-value" id="stat-speed">-</span>
+                </div>
+                <div class="speedometer-container">
+                    <div class="speedometer-bar" id="speedometer-bar"></div>
+                </div>
+
+                <div class="stat-row">
+                    <span class="stat-label">Generated Tokens:</span>
+                    <span class="stat-value" id="stat-tokens">-</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main id="chat-area">
+            <!-- Header bar -->
+            <div id="chat-header">
+                <div class="header-title-container">
+                    <h1 class="header-title">
+                        <span class="header-pulse-dot"></span>
+                        <span id="active-server-title">Gemma 4 Split Server</span>
+                    </h1>
+                    <span class="header-desc" id="active-server-desc">Evaluating NPU (Prefill / Bottom layers) + GPU (Top layers) performance</span>
+                </div>
+            </div>
+
+            <!-- Messages area -->
+            <div id="messages-container">
+                <!-- Preset Options (removed dynamically on first prompt) -->
+                <div id="presets-container">
+                    <h2 class="presets-title">Choose a prompt to test inference speed</h2>
+                    <div class="presets-grid">
+                        
+                        <div class="preset-card" onclick="selectPreset('elephant')">
+                            <div class="preset-header">
+                                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                                <span>Elephant Alert Report</span>
+                            </div>
+                            <div class="preset-body">
+                                Triggers the warning generator: creates a trilingual emergency alert in English, Hindi, and Tamil based on sensor telemetry.
+                            </div>
+                        </div>
+
+                        <div class="preset-card" onclick="selectPreset('quantum')">
+                            <div class="preset-header">
+                                <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+                                <span>Quantum Physics</span>
+                            </div>
+                            <div class="preset-body">
+                                A simple short-sentence request: "Explain quantum computing in exactly one short sentence." High speed test.
+                            </div>
+                        </div>
+
+                        <div class="preset-card" onclick="selectPreset('filter')">
+                            <div class="preset-header">
+                                <svg viewBox="0 0 24 24"><path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
+                                <span>Acoustic Low-Pass Filter</span>
+                            </div>
+                            <div class="preset-body">
+                                Code generation task: asks the model to draft a clean Python filter script for 250Hz cutoffs on 16kHz audio data.
+                            </div>
+                        </div>
+
+                        <div class="preset-card" onclick="selectPreset('poetic')">
+                            <div class="preset-header">
+                                <svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                                <span>Creative Writing</span>
+                            </div>
+                            <div class="preset-body">
+                                Longer creative output: describing an elephant crossing the forest border at dawn in a vivid, poetic voice.
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input area -->
+            <div id="input-container">
+                <div class="input-wrapper">
+                    <textarea id="chat-input" placeholder="Type a message or click a preset above... (Enter to send)" rows="1"></textarea>
+                    <button id="send-btn" class="action-btn" onclick="sendMessage()">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const inputField = document.getElementById('chat-input');
+        const container = document.getElementById('messages-container');
+        const activeServerTitle = document.getElementById('active-server-title');
+        const activeServerDesc = document.getElementById('active-server-desc');
+        const layerGrid = document.getElementById('layer-grid');
+        const sendBtn = document.getElementById('send-btn');
+        
+        // Telemetry DOM nodes
+        const statEngine = document.getElementById('stat-engine');
+        const statDevice = document.getElementById('stat-device');
+        const statLatency = document.getElementById('stat-latency');
+        const statSpeed = document.getElementById('stat-speed');
+        const statTokens = document.getElementById('stat-tokens');
+        const speedometerBar = document.getElementById('speedometer-bar');
+
+        let activePort = 8082;
+        let isGenerating = false;
+        let serverStatuses = { 8080: false, 8081: false, 8082: false };
+
+        const presetPrompts = {
+            elephant: "Detection data: elephant detected at Gaja camp perimeter on 2026-07-11. Vision confidence: 0.95. Audio ratio: 0.72. Generate English, Hindi, and Tamil alerts.",
+            quantum: "Explain quantum computing in exactly one short sentence.",
+            filter: "Write a short Python script for a simple audio low-pass filter (cutoff 250Hz, 16kHz samplerate) using numpy.",
+            poetic: "Describe an elephant walking through a misty forest border at sunrise in a poetic style, using around 100 words."
+        };
+
+        // Render the 36 layers of Gemma 4
+        function renderLayerGrid(port) {
+            layerGrid.innerHTML = '';
+            // Gemma 4 has 36 layers (numbered 0 to 35)
+            for (let i = 0; i < 36; i++) {
+                const box = document.createElement('div');
+                box.className = 'layer-box';
+                box.id = `layer-box-${i}`;
+                box.textContent = i;
+                
+                if (port === 8082) {
+                    // Split model: 0-16 on NPU, 17-35 on GPU
+                    if (i <= 16) {
+                        box.classList.add('npu-layer');
+                    } else {
+                        box.classList.add('gpu-layer');
+                    }
+                } else if (port === 8081) {
+                    // NPU-only
+                    box.classList.add('npu-layer');
+                } else {
+                    // CPU-only
+                    box.classList.add('cpu-layer');
+                }
+                
+                layerGrid.appendChild(box);
+            }
+        }
+
+        // Animate the active execution path during generation
+        let pulseTimer = null;
+        function startPipelinePulse(port) {
+            stopPipelinePulse();
+            let index = 0;
+            
+            pulseTimer = setInterval(() => {
+                // Clear previous active states
+                const activeBoxes = layerGrid.querySelectorAll('.active-process');
+                activeBoxes.forEach(b => b.classList.remove('active-process'));
+                
+                // Add active state to current layer
+                const currentBox = document.getElementById(`layer-box-${index}`);
+                if (currentBox) {
+                    currentBox.classList.add('active-process');
+                }
+                
+                index = (index + 1) % 36;
+            }, 60);
+        }
+
+        function stopPipelinePulse() {
+            if (pulseTimer) {
+                clearInterval(pulseTimer);
+                pulseTimer = null;
+            }
+            const activeBoxes = layerGrid.querySelectorAll('.active-process');
+            activeBoxes.forEach(b => b.classList.remove('active-process'));
+        }
+
+        // Switch ports/model servers
+        function switchPort(port) {
+            if (isGenerating) return;
+
+            document.querySelectorAll('.port-option').forEach(el => el.classList.remove('active'));
+            document.getElementById(`port-option-${port}`).classList.add('active');
+            
+            activePort = port;
+            renderLayerGrid(port);
+
+            if (port === 8082) {
+                activeServerTitle.textContent = "Gemma 4 Split Server";
+                activeServerDesc.textContent = "Evaluating NPU (Prefill / Bottom layers) + GPU (Top layers) performance";
+                statEngine.textContent = "geniex (llama.cpp split)";
+                statDevice.textContent = "HTP0, GPUOpenCL";
+            } else if (port === 8081) {
+                activeServerTitle.textContent = "Gemma 4 Pure NPU Server";
+                activeServerDesc.textContent = "Running prompt prefill and token generation completely on Hexagon NPU";
+                statEngine.textContent = "geniex (llama.cpp NPU)";
+                statDevice.textContent = "Hexagon HTP";
+            } else {
+                activeServerTitle.textContent = "Gemma 4 CPU Server";
+                activeServerDesc.textContent = "Running locally via llama.cpp server optimized for CPU and vision models";
+                statEngine.textContent = "llama-server";
+                statDevice.textContent = "CPU (ARM64 Neon)";
+            }
+            
+            // Reset statistics
+            statLatency.textContent = "-";
+            statSpeed.textContent = "-";
+            statTokens.textContent = "-";
+            speedometerBar.style.width = '0%';
+        }
+
+        // Auto-sizing textarea
+        inputField.addEventListener('input', () => {
+            inputField.style.height = 'auto';
+            inputField.style.height = Math.min(inputField.scrollHeight, 200) + 'px';
+        });
+
+        // Submit on Enter
+        inputField.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Select a preset prompt card
+        function selectPreset(key) {
+            if (isGenerating) return;
+            const prompt = presetPrompts[key];
+            inputField.value = prompt;
+            inputField.style.height = 'auto';
+            inputField.style.height = inputField.scrollHeight + 'px';
+            inputField.focus();
+        }
+
+        // Health checkers for ports
+        async function checkServerHealth(port) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1500);
+                const url = `/health`;
+                
+                // Fetch direct or relatively via port check if same origin
+                // To support querying other local ports, let's fetch to the target server directly
+                const targetUrl = `http://127.0.0.1:${port}/health`;
+                const response = await fetch(targetUrl, { method: 'GET', signal: controller.signal });
+                clearTimeout(timeoutId);
+                
+                const dot = document.getElementById(`dot-${port}`);
+                if (response.ok) {
+                    serverStatuses[port] = true;
+                    if (dot) dot.className = 'status-dot online';
+                } else {
+                    serverStatuses[port] = false;
+                    if (dot) dot.className = 'status-dot offline';
+                }
+            } catch (err) {
+                serverStatuses[port] = false;
+                const dot = document.getElementById(`dot-${port}`);
+                if (dot) dot.className = 'status-dot offline';
+            }
+        }
+
+        async function updateAllHealth() {
+            await checkServerHealth(8080);
+            await checkServerHealth(8081);
+            await checkServerHealth(8082);
+        }
+
+        // Initialize status polling
+        updateAllHealth();
+        setInterval(updateAllHealth, 5000);
+
+        // Append markdown/html message to chat
+        function appendMessage(sender, text) {
+            const row = document.createElement('div');
+            row.className = `message-row msg-${sender}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = `bubble bubble-${sender}`;
+            
+            if (sender === 'model') {
+                bubble.innerHTML = formatMarkdown(text);
+            } else {
+                bubble.textContent = text;
+            }
+            
+            row.appendChild(bubble);
+            container.appendChild(row);
+            container.scrollTop = container.scrollHeight;
+            return bubble;
+        }
+
+        // Extremely light markdown formatter (bold, code, lists, linebreaks)
+        function formatMarkdown(text) {
+            // Escape HTML characters first
+            let html = text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+            
+            // Handle Code blocks
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+                return `<pre><code class="language-${lang}">${code.trim()}</code></pre>`;
+            });
+
+            // Handle inline code
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+            // Handle bold text
+            html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+            // Handle lists
+            html = html.replace(/^\s*-\s+(.+)$/gm, '<li>$1</li>');
+            html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+
+            // Handle paragraph/line breaks
+            html = html.replace(/\n/g, '<br>');
+
+            return html;
+        }
+
+        // Show/hide loading bubbles
+        function appendTypingIndicator() {
+            const row = document.createElement('div');
+            row.className = 'message-row msg-model';
+            row.id = 'typing-indicator-row';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble bubble-model typing-indicator';
+            bubble.innerHTML = `
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            `;
+            
+            row.appendChild(bubble);
+            container.appendChild(row);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator-row');
+            if (indicator) indicator.remove();
+        }
+
+        // Stream and generate completion
+        async function sendMessage() {
+            const text = inputField.value.trim();
+            if (!text || isGenerating) return;
+
+            // Remove preset cards on first prompt
+            const presets = document.getElementById('presets-container');
+            if (presets) presets.remove();
+
+            isGenerating = true;
+            sendBtn.disabled = true;
+            inputField.value = '';
+            inputField.style.height = '52px';
+
+            appendMessage('user', text);
+            appendTypingIndicator();
+            startPipelinePulse(activePort);
+
+            // Construct payload history (send only current user prompt for simplicity/speed)
+            const messages = [{ role: 'user', content: text }];
+
+            // Timing telemetry variables
+            const startTime = performance.now();
+            let accumulatedText = "";
+            let bubble = null;
+            let tokenCount = 0;
+
+            statLatency.textContent = "...";
+            statSpeed.textContent = "...";
+            statTokens.textContent = "0";
+
+            try {
+                // Point target URL to selected port
+                const url = `http://127.0.0.1:${activePort}/v1/chat/completions`;
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: messages,
+                        temperature: 0.1,
+                        max_tokens: 400,
+                        stream: true,
+                        chat_template_kwargs: { enable_thinking: false }
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || `HTTP ${response.status}`);
+                }
+
+                removeTypingIndicator();
+                
+                // Initialize streaming reader
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop(); // Keep incomplete lines in the buffer
+
+                    for (const line of lines) {
+                        const cleaned = line.trim();
+                        if (!cleaned) continue;
+                        if (cleaned === "data: [DONE]") continue;
+
+                        if (cleaned.startsWith("data: ")) {
+                            try {
+                                const json = JSON.parse(cleaned.substring(6));
+                                if (json.choices && json.choices[0]) {
+                                    const delta = json.choices[0].delta || {};
+                                    const content = delta.content || "";
+                                    
+                                    if (content) {
+                                        if (!bubble) {
+                                            // Create the model answer bubble on first token arrival
+                                            bubble = appendMessage('model', '');
+                                        }
+                                        accumulatedText += content;
+                                        bubble.innerHTML = formatMarkdown(accumulatedText);
+                                        container.scrollTop = container.scrollHeight;
+                                        
+                                        tokenCount++;
+                                        statTokens.textContent = tokenCount;
+                                        
+                                        // Calculate rolling speed
+                                        const now = performance.now();
+                                        const deltaS = (now - startTime) / 1000;
+                                        if (deltaS > 0.05) {
+                                            const tokPerSec = tokenCount / deltaS;
+                                            statSpeed.textContent = `${tokPerSec.toFixed(1)} t/s`;
+                                            
+                                            // Map speedometer bar (max out around 30 tok/s for visual scaling)
+                                            const fillPercentage = Math.min((tokPerSec / 30) * 100, 100);
+                                            speedometerBar.style.width = `${fillPercentage}%`;
+                                        }
+                                    }
+                                    
+                                    // Parse final token finish reasons or timings (if passed in chunk)
+                                    if (json.timings && json.timings.wall_s) {
+                                        statLatency.textContent = `${json.timings.wall_s.toFixed(2)}s`;
+                                        const finalSpeed = tokenCount / json.timings.wall_s;
+                                        statSpeed.textContent = `${finalSpeed.toFixed(1)} t/s`;
+                                        speedometerBar.style.width = `${Math.min((finalSpeed / 30) * 100, 100)}%`;
+                                    }
+                                }
+                            } catch (e) {
+                                console.error("Error parsing stream chunk", e, cleaned);
+                            }
+                        }
+                    }
+                }
+
+                // If timings weren't supplied in stream chunks, calculate elapsed client-side
+                const totalElapsedS = (performance.now() - startTime) / 1000;
+                if (statLatency.textContent === "...") {
+                    statLatency.textContent = `${totalElapsedS.toFixed(2)}s (RTO)`;
+                    const avgSpeed = tokenCount / totalElapsedS;
+                    statSpeed.textContent = `${avgSpeed.toFixed(1)} t/s`;
+                    speedometerBar.style.width = `${Math.min((avgSpeed / 30) * 100, 100)}%`;
+                }
+
+            } catch (err) {
+                removeTypingIndicator();
+                appendMessage('model', `**Error during generation**: ${err.message}\n\nPlease verify that the selected server (Port :${activePort}) is active and running.`);
+                statLatency.textContent = "Error";
+                statSpeed.textContent = "0.0 t/s";
+                speedometerBar.style.width = '0%';
+            } finally {
+                isGenerating = false;
+                sendBtn.disabled = false;
+                stopPipelinePulse();
+                inputField.focus();
+            }
+        }
+
+        // Initialize grid on load
+        renderLayerGrid(8082);
+        switchPort(8082);
+    </script>
+</body>
+</html>
