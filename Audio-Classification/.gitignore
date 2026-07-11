@@ -11,6 +11,8 @@ data/
 test_results.csv
 output/elephant_embeddings.npz
 elephant_embeddings.npz
+elephant_detections.log
+detections/
 __pycache__/
 *.py[cod]
 *$py.class

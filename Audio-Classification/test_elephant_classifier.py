@@ -101,6 +101,18 @@ def load_default_aggregation() -> str | None:
     return None
 
 
+def load_default_pooling() -> str:
+    """Load per-patch probability pooling ('max'/'mean') from metadata."""
+    if os.path.exists(METADATA_PATH):
+        try:
+            with open(METADATA_PATH, "r") as f:
+                meta = json.load(f)
+            return meta.get("probability_pooling", "mean")
+        except Exception:
+            pass
+    return "mean"
+
+
 # --- Model Loading --------------------------------------------------------------
 
 def load_models(use_quantized=False):
@@ -135,13 +147,17 @@ def load_models(use_quantized=False):
 # --- Single File Inference -------------------------------------------------------
 
 def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True,
-                 profile=False, aggregation=None):
+                 profile=False, aggregation=None, pooling="mean"):
     """
     Run full inference on a single audio file.
 
     Args:
-        aggregation: None for legacy patch-level averaging,
-                     or 'mean'/'mean_max'/'mean_max_std' for clip-level aggregation.
+        aggregation: None for per-patch scoring,
+                     or 'mean'/'mean_max'/'mean_max_std' for a clip-level model.
+        pooling:     'max' or 'mean' — how to pool per-patch probabilities into a
+                     clip decision. 'max' (fire if any 0.96 s patch looks like an
+                     elephant) is correct for short-event detection; 'mean' is the
+                     legacy behaviour.
 
     Returns dict with prediction, confidence, per-patch details, timing.
     """
@@ -187,26 +203,30 @@ def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True,
         avg_conf = clip_prob
         max_conf = clip_prob
         min_conf = clip_prob
+        decision_conf = clip_prob
         prediction = "Elephant" if clip_prob > threshold else "Non-Elephant"
         votes_above = 1 if clip_prob > threshold else 0
         mode_label = f"clip-level ({aggregation})"
     else:
-        # ── Legacy: per-patch probability averaging ─────────────────────
+        # ── Per-patch scoring with max/mean pooling ─────────────────────
         patch_probs = clf.predict_proba(embeddings)[:, 1]  # P(elephant) per patch
         t_xgb = time.perf_counter()
 
         avg_conf = float(np.mean(patch_probs))
         max_conf = float(np.max(patch_probs))
         min_conf = float(np.min(patch_probs))
-        prediction = "Elephant" if avg_conf > threshold else "Non-Elephant"
+        # Score used for the decision depends on pooling.
+        decision_conf = max_conf if pooling == "max" else avg_conf
+        prediction = "Elephant" if decision_conf > threshold else "Non-Elephant"
         votes_above = int(np.sum(patch_probs > threshold))
-        mode_label = "patch-level avg (legacy)"
+        mode_label = f"per-patch ({pooling}-pool)"
 
     result = {
         "filename": filename,
         "path": path,
         "prediction": prediction,
         "avg_confidence": avg_conf,
+        "decision_confidence": decision_conf,
         "max_confidence": max_conf,
         "min_confidence": min_conf,
         "num_patches": total_patches,
@@ -228,7 +248,10 @@ def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True,
         print(f"  Duration:    {diag['duration_s']:.2f}s -> {total_patches} patch(es)")
         print(f"  Mode:        {mode_label}")
         print(f"  Prediction:  {prediction}")
-        print(f"  Confidence:  {avg_conf:.2%}")
+        if aggregation is None and pooling == "max":
+            print(f"  Confidence:  {max_conf:.2%}  (max patch)")
+        else:
+            print(f"  Confidence:  {avg_conf:.2%}")
         if aggregation is None:
             print(f"  Patch range: {min_conf:.2%} - {max_conf:.2%}")
             print(f"  Votes:       {votes_above}/{total_patches} patches above {threshold}")
@@ -283,7 +306,7 @@ def infer_ground_truth(filepath):
 
 
 def batch_test(input_path, yamnet_session, clf, threshold=0.5, profile=False,
-               eval_mode=False, aggregation=None):
+               eval_mode=False, aggregation=None, pooling="mean"):
     """Run inference on all audio files in a folder."""
     files = find_audio_files(input_path)
     if not files:
@@ -298,7 +321,7 @@ def batch_test(input_path, yamnet_session, clf, threshold=0.5, profile=False,
         print(f"\n[{i+1}/{len(files)}] ", end="")
         result = predict_file(fpath, yamnet_session, clf, threshold,
                              verbose=True, profile=profile,
-                             aggregation=aggregation)
+                             aggregation=aggregation, pooling=pooling)
         if result:
             if eval_mode:
                 result["ground_truth"] = infer_ground_truth(fpath)
@@ -350,9 +373,9 @@ def batch_test(input_path, yamnet_session, clf, threshold=0.5, profile=False,
             print(f"\n  -- Threshold Sweep --")
             print(f"    {'Threshold':<12} {'Precision':<12} {'Recall':<12} {'F1':<12}")
             for t in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
-                tp_t = sum(1 for r in labeled if r["ground_truth"] == "Elephant" and r["avg_confidence"] > t)
-                fp_t = sum(1 for r in labeled if r["ground_truth"] == "Non-Elephant" and r["avg_confidence"] > t)
-                fn_t = sum(1 for r in labeled if r["ground_truth"] == "Elephant" and r["avg_confidence"] <= t)
+                tp_t = sum(1 for r in labeled if r["ground_truth"] == "Elephant" and r["decision_confidence"] > t)
+                fp_t = sum(1 for r in labeled if r["ground_truth"] == "Non-Elephant" and r["decision_confidence"] > t)
+                fn_t = sum(1 for r in labeled if r["ground_truth"] == "Elephant" and r["decision_confidence"] <= t)
                 prec_t = tp_t / (tp_t + fp_t) if (tp_t + fp_t) else 0
                 rec_t = tp_t / (tp_t + fn_t) if (tp_t + fn_t) else 0
                 f1_t = 2 * prec_t * rec_t / (prec_t + rec_t) if (prec_t + rec_t) else 0
@@ -445,6 +468,11 @@ Examples:
     parser.add_argument("--aggregation", type=str, default=None,
                        choices=["mean", "mean_max", "mean_max_std"],
                        help="Clip-level aggregation strategy (matches retrained model)")
+    parser.add_argument("--pooling", type=str, default=None,
+                       choices=["max", "mean"],
+                       help="Per-patch probability pooling for the decision "
+                            "(default: auto from metadata or 'mean'). 'max' fires "
+                            "on the strongest 0.96s patch — correct for short calls.")
     parser.add_argument("--profile", action="store_true",
                        help="Show per-stage timing breakdown")
     parser.add_argument("--eval", action="store_true",
@@ -481,6 +509,11 @@ Examples:
         threshold = load_default_threshold()
         print(f"[Auto] Using threshold from model_metadata.json: {threshold}")
 
+    pooling = args.pooling
+    if pooling is None:
+        pooling = load_default_pooling()
+        print(f"[Auto] Using pooling: {pooling}")
+
     # Load models
     yamnet_session, clf = load_models(use_quantized=args.quantized)
 
@@ -490,14 +523,14 @@ Examples:
         result = predict_file(
             args.input, yamnet_session, clf,
             threshold=threshold, verbose=True, profile=args.profile,
-            aggregation=aggregation
+            aggregation=aggregation, pooling=pooling
         )
         print(f"{'='*60}")
     else:
         batch_test(
             args.input, yamnet_session, clf,
             threshold=threshold, profile=args.profile, eval_mode=args.eval,
-            aggregation=aggregation
+            aggregation=aggregation, pooling=pooling
         )
 
 

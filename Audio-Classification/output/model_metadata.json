@@ -1,0 +1,18 @@
+{
+  "model_type": "per_patch_yamnet_xgboost",
+  "n_features": 1024,
+  "aggregation_strategy": null,
+  "probability_pooling": "max",
+  "selected_threshold": 0.35,
+  "decision_rule": "Fire if the maximum per-patch P(elephant) over the clip exceeds selected_threshold. Elephant calls are short events (~1 patch), so max-pooling is used instead of mean-pooling.",
+  "operating_point_rationale": "Chosen for a conservation early-warning use case: maximize recall (never miss an elephant) at the cost of some false positives. On the 10 bundled demo samples this yields recall=1.00 (5/5 elephants detected) and 3 false positives that are a genuine model-discrimination limitation (see known_limitations).",
+  "live_debounce": {
+    "windows_required_m": 2,
+    "window_count_k": 3,
+    "note": "Live detector requires M of the last K analysis windows to fire before confirming, suppressing momentary false positives."
+  },
+  "known_limitations": [
+    "The shipped elephant_xgb.json is the per-patch model. Some non-elephant clips (e.g. Non_9_10928, Non_16_11656) contain patches that score as high as genuine elephant calls, so no threshold cleanly separates them. Fixing this requires retraining with hard-negative mining (see train_binary_detector.py + build_manifest.py), which needs the training dataset (ESC-50 / UrbanSound8K negatives + elephant positives via download.py)."
+  ],
+  "notes": "Threshold and pooling here are consumed by both test_elephant_classifier.py and live_elephant_detect.py. To prioritize precision over recall, raise selected_threshold toward 0.5."
+}
