@@ -200,11 +200,21 @@ class MainActivity : ComponentActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 
+            var lastFrameTimeMs = 0L
+
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 try {
+                    val currentTime = System.currentTimeMillis()
+                    // Throttle to roughly 15 FPS (1000ms / 15 = 66ms)
+                    if (currentTime - lastFrameTimeMs < 66) {
+                        return@setAnalyzer
+                    }
+                    lastFrameTimeMs = currentTime
+
                     val bitmap = imageProxy.toBitmap()
                     val stream = java.io.ByteArrayOutputStream()
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
+                    // Heavy compression (40) to prevent TCP buffer bloat while maintaining 640x480 size
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 40, stream)
                     val jpegBytes = stream.toByteArray()
                     // Prepend 0x01 for Video
                     val payload = ByteArray(jpegBytes.size + 1)
