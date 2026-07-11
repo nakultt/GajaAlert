@@ -22,6 +22,7 @@ from gaja.config import Config
 from gaja.incidents import IncidentLog
 from gaja.llm import GemmaClient
 from gaja.pipeline import Pipeline
+import ncnn
 
 # Attempt to load sounddevice (often fails on Windows ARM64 due to missing DLLs)
 try:
@@ -30,12 +31,7 @@ try:
 except OSError as e:
     print(f"[Warning] Audio playback disabled: {e}")
     AUDIO_ENABLED = False
-
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
-log = logging.getLogger("gaja.server")
-
-cfg = Config.load()
+import queue
 
 # Queues to pass data from the async websocket thread to processing threads
 video_queue = queue.Queue(maxsize=2)
@@ -187,6 +183,7 @@ def display_loop():
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if frame is not None:
                 cv2.imshow("Edge Video Stream", frame)
+                
         except queue.Empty:
             pass
 
