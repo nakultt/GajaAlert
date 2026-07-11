@@ -27,14 +27,20 @@ class Config:
     frames_per_check: int = 2
     frame_gap_s: float = 0.7
     confirm_confidence: float = 0.6
+    # YOLO-triggered VLM verification (arm_server.py)
+    vlm_poll_interval_s: float = 1.5
+    # :8080 runs with a 32K context (docs/LOCAL_INFERENCE.md); kept low
+    # because each turn's tool calls/results still add up even truncated.
+    sarvam_agent_max_turns: int = 4
     # llm endpoints: vision = llama.cpp E4B+mmproj, text = geniex NPU/GPU split E2B
     vision_llm_base: str = "http://127.0.0.1:8080"
     text_llm_base: str = "http://127.0.0.1:8082"
-    llm_timeout_s: float = 120.0
+    llm_timeout_s: float = 500.0
     llm_retries: int = 2
     # servers
     sensor_port: int = 9000
     alert_port: int = 9001
+    dashboard_port: int = 9002
     # output
     incidents_dir: str = "incidents"
     location_name: str = "Gaja camp perimeter"

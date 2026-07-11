@@ -19,8 +19,10 @@ import numpy as np
 import websockets
 
 from gaja.config import Config
+from gaja.dashboard import start_dashboard
+from gaja.incidents import IncidentLog
 from gaja.llm import GemmaClient
-from sarvam_workflow import run_sarvam_workflow
+from sarvam_agent import run_sarvam_agent
 import ncnn
 
 
@@ -95,6 +97,7 @@ def send_alert(payload: bytes):
 
 # 1. Pipeline wiring (Legacy Audio Pipeline removed)
 llm = GemmaClient(cfg)
+incident_log = IncidentLog(cfg)
 
 
 # 2. WEBSOCKET SERVERS
@@ -117,6 +120,8 @@ async def sensor_handler(websocket):
                     except queue.Empty:
                         pass
                 video_queue.put(payload)
+            elif header == 0x02:
+                pass  # audio: legacy pipeline removed, sensor still sends it — ignore quietly
             else:
                 log.warning("Unknown header: %s", header)
     except websockets.exceptions.ConnectionClosed:
@@ -152,45 +157,108 @@ def start_asyncio_servers():
     asyncio.run(run_servers())
 
 
-def vlm_thread_target(image):
-    global vlm_active
+# Continuous VLM verification, started when YOLO first sees an elephant and
+# closed as soon as YOLO stops seeing one. Verification and the detailed
+# report both need image input, so they go to the CPU vision server
+# (:8080) — the only server here with mmproj; the NPU servers (:8081/:8082)
+# are text-only. Report/alert text generation still prefers the NPU+GPU
+# split server (:8082) via GemmaClient.generate_alert's existing fallback
+# order, unchanged from before.
+_elephant_present = threading.Event()
+_verifier_thread: threading.Thread | None = None
+
+
+def _grab_frames(n: int, gap_s: float) -> list:
+    """Same latest-frame-with-spacing approach as the old audio pipeline
+    (gaja/pipeline.py) — spaced grabs off the single-slot frame_source()."""
+    frames = []
+    for i in range(n):
+        if i:
+            time.sleep(gap_s)
+        jpeg = frame_source()
+        if jpeg is not None:
+            frames.append(jpeg)
+    return frames
+
+
+def _handle_verified(det):
+    """Runs once per sighting, right after VLM verification succeeds."""
+    incident_id = IncidentLog.new_id()
+    now = datetime.datetime.now().astimezone()
+    when_iso = now.isoformat(timespec="seconds")
+    when_display = now.strftime("%I:%M %p")
+
+    frames = _grab_frames(cfg.frames_per_check, cfg.frame_gap_s)
+    description = llm.generate_detailed_report(frames) if frames else None
+    alert = llm.generate_alert(det, ratio=1.0, when=when_display)
+    log.info("Incident report: %s", description or det.notes)
+    log.info("Alert generated (fallback=%s): %s", alert.fallback, alert.report)
+
+    observation = (description or det.notes or "")[:800]
+    incident_text = (
+        f"Elephant confirmed near {cfg.location_name} at {when_display} "
+        f"(confidence {det.confidence:.2f}).\n"
+        f"Detailed observation: {observation}\n"
+        f"Public alert: {alert.report}"
+    )
+    sarvam_result = None
     try:
-        log.info("VLM thread started. Encoding frame...")
-        ret, buffer = cv2.imencode('.jpg', image)
-        if not ret:
-            log.error("Failed to encode frame to JPEG")
-            return
-        jpeg_bytes = buffer.tobytes()
-        
-        log.info("Sending frame to Gemma vision for confirmation...")
-        det = llm.detect_elephant([jpeg_bytes])
-        
+        sarvam_result = asyncio.run(run_sarvam_agent(cfg, llm, incident_text, incident_id))
+    except Exception:
+        log.exception("Sarvam agent failed")
+
+    incident_log.record({
+        "id": incident_id,
+        "timestamp": when_iso,
+        "status": "alerted",
+        "detection": {"elephant": det.elephant, "confidence": det.confidence, "notes": det.notes},
+        "report": description or det.notes,
+        "alert": {"report": alert.report, "alerts": alert.alerts, "fallback": alert.fallback,
+                   "location": cfg.location_name},
+        "sarvam": {
+            "summary": sarvam_result.summary if sarvam_result else "",
+            "translations": sarvam_result.translations if sarvam_result else {},
+            "audio_files": sarvam_result.audio_files if sarvam_result else {},
+            "final_message": sarvam_result.final_message if sarvam_result else "",
+        },
+    }, frames)
+
+
+def verifier_loop():
+    """Background thread: keeps polling live frames through the vision LLM
+    while YOLO still sees an elephant. Verifies (and reports/alerts) once
+    per sighting, but keeps watching — and logging re-checks — until the
+    elephant leaves frame, at which point the thread exits on its own."""
+    log.info("VLM verification started")
+    verified = False
+    while _elephant_present.is_set():
+        frames = _grab_frames(cfg.frames_per_check, cfg.frame_gap_s)
+        if not frames:
+            time.sleep(cfg.vlm_poll_interval_s)
+            continue
+        det = llm.detect_elephant(frames)
         if det is None:
-            log.error("Gemma vision server unreachable.")
-            return
-            
-        if det.elephant:
-            log.info("Gemma confirmed elephant! Confidence: %.2f", det.confidence)
-            when = datetime.datetime.now().strftime("%I:%M %p")
-            alert = llm.generate_alert(det, ratio=1.0, when=when)
-            
-            log.info("Triggering Sarvam MCP tools with alert: %s", alert.report)
-            asyncio.run(run_sarvam_workflow(alert.report))
-            log.info("Sarvam workflow completed successfully.")
-        else:
-            log.info("Gemma did NOT confirm elephant. False positive.")
-    except Exception as e:
-        log.exception("Error in VLM thread")
-    finally:
-        # Reset tracking so we can trigger again
-        # Note: Must use a lock or ensure safe assignment if global usage gets complex. 
-        # Python GIL makes single boolean assignments thread-safe enough for this simple tracking.
-        log.info("VLM processing finished. Re-arming YOLO tracking.")
-        
-def run_vlm(image):
+            log.error("VLM verification: vision server (%s) unreachable", cfg.vision_llm_base)
+            time.sleep(cfg.vlm_poll_interval_s)
+            continue
+        log.info("VLM check: elephant=%s confidence=%.2f notes=%s",
+                  det.elephant, det.confidence, det.notes)
+        if not verified and det.elephant and det.confidence >= cfg.confirm_confidence:
+            verified = True
+            log.info("Elephant VERIFIED by VLM (confidence=%.2f)", det.confidence)
+            _handle_verified(det)
+        time.sleep(cfg.vlm_poll_interval_s)
+    log.info("Elephant left frame — VLM verification closing")
+
+
+def start_verifier_if_needed():
     """Fires when local YOLO detects an elephant in a display frame."""
-    log.info("VLM Activated (image shape=%s). Starting background thread.", image.shape)
-    threading.Thread(target=vlm_thread_target, args=(image,), daemon=True).start()
+    global _verifier_thread
+    _elephant_present.set()
+    if _verifier_thread is None or not _verifier_thread.is_alive():
+        _verifier_thread = threading.Thread(target=verifier_loop, daemon=True,
+                                            name="gaja-vlm-verify")
+        _verifier_thread.start()
 
 
 def display_loop():
@@ -201,9 +269,6 @@ def display_loop():
         log.warning("No display available (%s); running headless", e)
         while True:
             time.sleep(3600)
-
-    first_detection_frame = None
-    vlm_active = False
 
     log.info("Waiting for frames...")
     while True:
@@ -273,15 +338,10 @@ def display_loop():
 
                             if label == "elephant":
                                 elephant_found = True
-                                if first_detection_frame is None:
-                                    first_detection_frame = frame.copy()
-                                if not vlm_active:
-                                    vlm_active = True
-                                    run_vlm(first_detection_frame)
+                                start_verifier_if_needed()
 
                     if not elephant_found:
-                        first_detection_frame = None
-                        vlm_active = False
+                        _elephant_present.clear()
 
                 cv2.imshow("Edge Video Stream", display)
 
@@ -302,5 +362,6 @@ if __name__ == "__main__":
             log.warning("%s LLM at %s is not responding — start it before an incident",
                         name, base)
 
+    start_dashboard(cfg)
     threading.Thread(target=start_asyncio_servers, daemon=True).start()
     display_loop()

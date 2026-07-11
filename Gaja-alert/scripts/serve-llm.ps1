@@ -23,7 +23,7 @@
 
 param(
     [ValidateSet("gemma", "qwen")] [string]$Model = "gemma",
-    [int]$Ctx  = 8192,
+    [int]$Ctx  = 32768,
     [int]$Port = 8080,
     [int]$Threads = 8   # measured optimum on X1E80100, see docs/LOCAL_INFERENCE.md benchmarks
 )

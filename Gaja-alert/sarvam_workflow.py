@@ -4,6 +4,13 @@ import json
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+# Hardcoded fallback key (see e5fbd6f) — pulled out as a constant so
+# sarvam_agent.py can reuse the same value instead of duplicating the secret.
+# TODO: this is a live credential committed to the repo; rotate and move to
+# an untracked .env before this goes anywhere near a public remote.
+SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY", "sk_jb27svzp_3KP7k5AjVWsC5OkqAMFwyWLo")
+
+
 async def run_sarvam_workflow(input_text: str):
     """
     Connects to the Sarvam MCP server and executes a sequence of tools.
@@ -18,11 +25,7 @@ async def run_sarvam_workflow(input_text: str):
     server_params = StdioServerParameters(
         command="uvx",
         args=["sarvam-mcp"],
-        env={
-            **os.environ,
-            # Hardcoded SARVAM API key
-            "SARVAM_API_KEY": "sk_jb27svzp_3KP7k5AjVWsC5OkqAMFwyWLo"
-        }
+        env={**os.environ, "SARVAM_API_KEY": SARVAM_API_KEY},
     )
 
     print("Connecting to Sarvam MCP server...")

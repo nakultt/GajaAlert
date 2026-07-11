@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -40,6 +41,15 @@ ALERT_USER_TEMPLATE = (
     '{{"report": "<2-3 sentence incident report in English>", '
     '"alerts": {{"en": "<1-sentence public alert in English>", '
     '"hi": "<the same alert in Hindi>", "ta": "<the same alert in Tamil>"}}}}'
+)
+
+DETAILED_REPORT_PROMPT = (
+    "An elephant has just been verified in these camera frames. Write a "
+    "detailed incident report for a wildlife safety team: describe the "
+    "elephant (appearance, approximate size/position), its apparent "
+    "behavior (e.g. grazing, moving, agitated, approaching structures), the "
+    "surroundings, and any other relevant observations. "
+    'Reply with JSON only: {"description": "..."}'
 )
 
 
@@ -90,16 +100,20 @@ class GemmaClient:
         except OSError:
             return False
 
-    def _chat(self, base: str, messages: list, max_tokens: int) -> str | None:
-        body = json.dumps({
+    def _chat_message(self, base: str, messages: list, max_tokens: int,
+                       tools: list | None = None) -> dict | None:
+        """Full assistant message dict (content + tool_calls, if any)."""
+        body = {
             "messages": messages,
             "temperature": 0.1,
             "max_tokens": max_tokens,
             "chat_template_kwargs": {"enable_thinking": False},
-        }).encode()
+        }
+        if tools:
+            body["tools"] = tools
         req = urllib.request.Request(
             f"{base}/v1/chat/completions",
-            data=body,
+            data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
         )
         for attempt in range(self.cfg.llm_retries + 1):
@@ -107,15 +121,37 @@ class GemmaClient:
                 t0 = time.time()
                 with urllib.request.urlopen(req, timeout=self.cfg.llm_timeout_s) as r:
                     out = json.load(r)
-                text = out["choices"][0]["message"]["content"]
+                message = out["choices"][0]["message"]
                 log.info("%s answered in %.1fs", base, time.time() - t0)
-                return text
+                return message
+            except urllib.error.HTTPError as e:
+                # 4xx (e.g. "exceeds the available context size") is a
+                # request problem, not a transient failure -- retrying the
+                # same oversized payload would just fail 3x for nothing.
+                try:
+                    detail = e.read().decode(errors="replace")[:300]
+                except Exception:
+                    detail = str(e)
+                log.error("LLM call to %s rejected (HTTP %s): %s", base, e.code, detail)
+                return None
             except (OSError, KeyError, json.JSONDecodeError) as e:
                 log.error("LLM call to %s failed (attempt %d/%d): %s",
                           base, attempt + 1, self.cfg.llm_retries + 1, e)
                 if attempt < self.cfg.llm_retries:
                     time.sleep(5)
         return None
+
+    def _chat(self, base: str, messages: list, max_tokens: int) -> str | None:
+        message = self._chat_message(base, messages, max_tokens)
+        return message.get("content") if message else None
+
+    def chat_with_tools(self, base: str, messages: list, tools: list,
+                         max_tokens: int = 500) -> dict | None:
+        """Raw assistant message (incl. tool_calls) for an agentic tool-use
+        loop. Only the CPU vision server (:8080, started with --jinja) has
+        verified OpenAI-style tool-calling support in this repo — the NPU
+        servers' minimal HTTP handlers don't implement the `tools` field."""
+        return self._chat_message(base, messages, max_tokens, tools=tools)
 
     def detect_elephant(self, jpegs: list[bytes]) -> Detection | None:
         """Vision confirmation on :8080. None means the server was unreachable."""
@@ -159,3 +195,22 @@ class GemmaClient:
         msg = (f"ALERT: Elephant detected near {self.cfg.location_name} at {when}. "
                "Stay indoors and away from the area.")
         return Alert(report=msg, alerts={"en": msg}, fallback=True)
+
+    def generate_detailed_report(self, jpegs: list[bytes]) -> str | None:
+        """Rich behavior/surroundings narrative on :8080 (vision), called once
+        per sighting right after VLM verification succeeds."""
+        content = [{"type": "text", "text": DETAILED_REPORT_PROMPT}]
+        for jpeg in jpegs:
+            b64 = base64.b64encode(jpeg).decode()
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            })
+        text = self._chat(self.cfg.vision_llm_base,
+                          [{"role": "user", "content": content}], max_tokens=400)
+        if text is None:
+            return None
+        obj = parse_json_block(text)
+        if obj and obj.get("description"):
+            return str(obj["description"])
+        return text

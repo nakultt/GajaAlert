@@ -105,7 +105,7 @@ docs are committed.
 | `-t 12` | All 12 physical cores, no SMT on X1E80100. If the laptop must simultaneously run OpenCV + the WebSocket server, drop to `-t 10`. |
 | `--no-mmap` | Load weights fully into RAM: guarantees the Q4_0→ARM repack applies and avoids first-token page-fault stutter. Costs ~5 GB resident RAM (fine). |
 | `-fa on` | Flash attention: faster prompt processing, halves KV-cache memory. |
-| `-c 8192` | 8 K context is plenty for frame-confirmation prompts; raising it only grows KV cache. Model supports up to 128 K. |
+| `-c 32768` | 32 K context to avoid crashes with long context windows (supports up to 128 K). |
 | `--jinja` | Uses Gemma 4's own chat template, required for its native function-calling. |
 | `--mmproj mmproj-F16.gguf` | Enables image/audio input through the mtmd pipeline. |
 | `--host 127.0.0.1` | Local-only. Do not bind 0.0.0.0 unless the UNO Q needs to hit the API directly. |
