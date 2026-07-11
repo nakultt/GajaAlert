@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
                             factory = { ctx ->
                                 PreviewView(ctx).apply {
                                     // Extract the SurfaceProvider to use in our startCamera function
-                                    surfaceProvider = this.surfaceProvider
+                                    this@MainActivity.surfaceProvider = this.surfaceProvider
                                 }
                             },
                             modifier = Modifier
@@ -169,6 +169,14 @@ class MainActivity : ComponentActivity() {
                 stopStreaming()
             }
         })
+    }
+
+    private fun disconnectWebSocket() {
+        webSocket?.close(1000, "User disconnected")
+        webSocket = null
+        isConnected = false
+        streamingStatus = "Disconnected"
+        stopStreaming()
     }
 
     private fun startCamera() {
