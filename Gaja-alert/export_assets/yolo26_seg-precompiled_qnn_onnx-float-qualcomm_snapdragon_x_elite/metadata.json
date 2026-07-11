@@ -1,0 +1,95 @@
+{
+    "model_id": "yolo26_seg",
+    "model_name": "YOLO26-Segmentation",
+    "runtime": "precompiled_qnn_onnx",
+    "precision": "float",
+    "tool_versions": {
+        "qairt": "2.45.0.260326154327",
+        "onnx_runtime": "1.26.0"
+    },
+    "model_files": {
+        "yolo26_seg.onnx": {
+            "inputs": {
+                "image": {
+                    "shape": [
+                        1,
+                        640,
+                        640,
+                        3
+                    ],
+                    "dtype": "float32",
+                    "io_type": "image",
+                    "image_metadata": {},
+                    "value_range": [
+                        0.0,
+                        1.0
+                    ]
+                }
+            },
+            "outputs": {
+                "boxes": {
+                    "shape": [
+                        1,
+                        8400,
+                        4
+                    ],
+                    "dtype": "float32",
+                    "io_type": "bbox",
+                    "bbox_metadata": {}
+                },
+                "scores": {
+                    "shape": [
+                        1,
+                        8400
+                    ],
+                    "dtype": "float32",
+                    "softmax_applied": true,
+                    "labels_file": "coco_labels.txt"
+                },
+                "mask_coeffs": {
+                    "shape": [
+                        1,
+                        8400,
+                        32
+                    ],
+                    "dtype": "float32"
+                },
+                "class_idx": {
+                    "shape": [
+                        1,
+                        8400
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.0,
+                        "zero_point": 0
+                    },
+                    "labels_file": "coco_labels.txt"
+                },
+                "mask_protos": {
+                    "shape": [
+                        1,
+                        160,
+                        160,
+                        32
+                    ],
+                    "dtype": "float32"
+                }
+            }
+        }
+    },
+    "chipset_attributes": {
+        "aliases": [
+            "qualcomm-snapdragon-x-elite",
+            "sc8380xp"
+        ],
+        "marketing_name": "Snapdragon® X Elite",
+        "world": "Compute",
+        "supports_fp16": true,
+        "htp_version": 73,
+        "soc_model": 60,
+        "reference_device": "Snapdragon X Elite CRD",
+        "supports_weight_sharing": true,
+        "name": "qualcomm-snapdragon-x-elite"
+    }
+}

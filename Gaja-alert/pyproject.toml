@@ -1,7 +1,7 @@
 [project]
 name = "gaja-alert"
 version = "0.1.0"
-description = "Add your description here"
+description = "Edge elephant early-warning system: audio trigger + Gemma vision confirm + trilingual alerts on Snapdragon X Elite"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,4 +11,12 @@ dependencies = [
     "opencv-python>=5.0.0.93",
     "sounddevice>=0.5.5",
     "websockets>=16.1",
+]
+
+[project.optional-dependencies]
+# Parked YOLO26-seg / QNN NPU experiments (webcam_inference.py, export_assets/)
+yolo = [
+    "onnx>=1.22.0",
+    "onnxruntime-qnn==2.3.0",
+    "ultralytics>=8.4.92",
 ]
