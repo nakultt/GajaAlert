@@ -15,7 +15,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
@@ -25,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.mobile.ui.theme.MobileTheme
 import okhttp3.*
@@ -45,8 +48,10 @@ class MainActivity : ComponentActivity() {
     private var isConnected by mutableStateOf(false)
 
     private var streamingStatus by mutableStateOf("Ready to connect")
-
     private var pendingIpAddress = ""
+    
+    // We store the surface provider to bind it later when connected
+    private var surfaceProvider: Preview.SurfaceProvider? = null
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
@@ -75,7 +80,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        verticalArrangement = Arrangement.Top
                     ) {
                         OutlinedTextField(
                             value = ipAddress,
@@ -99,6 +104,20 @@ class MainActivity : ComponentActivity() {
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(text = streamingStatus)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // Critical: We MUST have a PreviewView to force the Camera HAL to pump frames
+                        AndroidView(
+                            factory = { ctx ->
+                                PreviewView(ctx).apply {
+                                    // Extract the SurfaceProvider to use in our startCamera function
+                                    surfaceProvider = this.surfaceProvider
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(3f/4f) // Typical camera aspect ratio
+                        )
                     }
                 }
             }
@@ -152,19 +171,22 @@ class MainActivity : ComponentActivity() {
         })
     }
 
-    private fun disconnectWebSocket() {
-        webSocket?.close(1000, "User disconnected")
-        webSocket = null
-        isConnected = false
-        streamingStatus = "Disconnected"
-        stopStreaming()
-    }
-
     private fun startCamera() {
+        if (surfaceProvider == null) {
+            Log.e(TAG, "SurfaceProvider is null! Camera cannot start.")
+            return
+        }
+        
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
+            // 1. Preview Usecase (Required by many OEMs to output frames)
+            val preview = Preview.Builder()
+                .build()
+            preview.setSurfaceProvider(surfaceProvider)
+
+            // 2. Image Analysis Usecase
             val imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -172,7 +194,10 @@ class MainActivity : ComponentActivity() {
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 try {
-                    val jpegBytes = YuvToJpegConverter.imageProxyToJpeg(imageProxy, 80)
+                    val bitmap = imageProxy.toBitmap()
+                    val stream = java.io.ByteArrayOutputStream()
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
+                    val jpegBytes = stream.toByteArray()
                     // Prepend 0x01 for Video
                     val payload = ByteArray(jpegBytes.size + 1)
                     payload[0] = 0x01
@@ -182,7 +207,7 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing frame", e)
                 } finally {
-                    imageProxy.close()
+                    imageProxy.close() // ALWAYS close to get the next frame
                 }
             }
 
@@ -190,7 +215,7 @@ class MainActivity : ComponentActivity() {
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis)
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
             } catch (e: Exception) {
                 Log.e(TAG, "Use case binding failed", e)
             }
