@@ -1,61 +1,64 @@
 #include <uwebsockets/App.h>
+#include <ixwebsocket/IXNetSystem.h>
+#include <ixwebsocket/IXWebSocket.h>
 #include <iostream>
 #include <vector>
 #include <cstdint>
+#include <string>
 
-// Stub function for vision inference
-void run_vision_inference(size_t frame_bytes) {
-    std::cout << "[Vision] Received frame payload of size: " 
-              << frame_bytes << " bytes" << std::endl;
-}
-
-// Stub function for audio inference
-void run_audio_inference(std::vector<int16_t> pcm_chunk) {
-    std::cout << "[Audio] Running inference on chunk: " 
-              << pcm_chunk.size() << " samples" << std::endl;
-}
+// Global WebSocket client to forward data to ARM PC
+ix::WebSocket ix_ws;
 
 int main() {
-    // Create the uWS App. By default it supports WebSocket connections.
+    ix::initNetSystem();
+
+    // Set the ARM PC WebSocket Server IP (testing locally on port 9000)
+    ix_ws.setUrl("ws://localhost:9000"); 
+
+    std::cout << "Arduino Relay: Connecting to ARM PC at ws://localhost:9000..." << std::endl;
+    ix_ws.setOnMessageCallback([](const ix::WebSocketMessagePtr& msg) {
+        if (msg->type == ix::WebSocketMessageType::Open) {
+            std::cout << "Arduino Relay: Connected successfully to ARM PC!" << std::endl;
+        } else if (msg->type == ix::WebSocketMessageType::Error) {
+            std::cerr << "Arduino Relay: Error connecting to ARM PC: " << msg->errorInfo.reason << std::endl;
+        }
+    });
+
+    ix_ws.start();
+
+    // Create the uWS App to receive data from the Mobile Phone
     uWS::App().ws<int>("/*", {
         .open = [](auto *ws) {
-            std::cout << "Client connected." << std::endl;
+            std::cout << "Mobile Phone connected to Arduino!" << std::endl;
         },
         .message = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
-            // Process only binary messages that are not empty
             if (opCode == uWS::OpCode::BINARY && !message.empty()) {
                 uint8_t header = static_cast<uint8_t>(message[0]);
-                std::string_view payload = message.substr(1);
 
                 if (header == 0x01) {
-                    // --- VIDEO PAYLOAD ---
-                    // Temporarily removed OpenCV for native Windows test
-                    run_vision_inference(payload.size());
-                } 
-                else if (header == 0x02) {
-                    // --- AUDIO PAYLOAD ---
-                    size_t num_samples = payload.size() / sizeof(int16_t);
-                    const int16_t* pcm_data = reinterpret_cast<const int16_t*>(payload.data());
-                    std::vector<int16_t> pcm_chunk(pcm_data, pcm_data + num_samples);
-                    
-                    run_audio_inference(pcm_chunk);
-                } 
-                else {
-                    std::cerr << "Unknown header byte: 0x" << std::hex 
-                              << static_cast<int>(header) << std::dec << std::endl;
+                    std::cout << "[Relay] Forwarding video frame (" << message.size() << " bytes) to ARM PC" << std::endl;
+                } else if (header == 0x02) {
+                    // Audio frame (silent logging to avoid spam)
+                }
+
+                // Push exact payload to ARM PC
+                if (ix_ws.getReadyState() == ix::ReadyState::Open) {
+                    ix_ws.sendBinary(std::string(message));
                 }
             }
         },
         .close = [](auto *ws, int code, std::string_view message) {
-            std::cout << "Client disconnected." << std::endl;
+            std::cout << "Mobile Phone disconnected." << std::endl;
         }
     }).listen("0.0.0.0", 8000, [](auto *listen_socket) {
         if (listen_socket) {
-            std::cout << "Edge Server listening on 0.0.0.0:8000" << std::endl;
+            std::cout << "Arduino Relay Server listening on 0.0.0.0:8000" << std::endl;
         } else {
             std::cerr << "Failed to bind to port 8000" << std::endl;
         }
     }).run();
 
+    ix_ws.stop();
+    ix::uninitNetSystem();
     return 0;
 }

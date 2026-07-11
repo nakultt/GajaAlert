@@ -5,7 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(unofficial-uwebsockets CONFIG REQUIRED)
+find_package(ixwebsocket CONFIG REQUIRED)
 
 add_executable(edge_server_windows main_windows.cpp)
 
-target_link_libraries(edge_server_windows PRIVATE unofficial::uwebsockets::uwebsockets)
+target_link_libraries(edge_server_windows PRIVATE unofficial::uwebsockets::uwebsockets ixwebsocket::ixwebsocket bcrypt)
