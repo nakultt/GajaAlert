@@ -20,8 +20,8 @@ async def run_sarvam_workflow(input_text: str):
         args=["sarvam-mcp"],
         env={
             **os.environ,
-            # Ensure you have your SARVAM API key set in your environment variables
-            "SARVAM_API_KEY": os.environ.get("SARVAM_API_KEY", "your-sarvam-api-key-here")
+            # Hardcoded SARVAM API key
+            "SARVAM_API_KEY": "sk_jb27svzp_3KP7k5AjVWsC5OkqAMFwyWLo"
         }
     )
 
