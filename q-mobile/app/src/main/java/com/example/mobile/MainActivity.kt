@@ -209,6 +209,15 @@ class MainActivity : ComponentActivity() {
                     imageProxy.close()
                     return@setAnalyzer
                 }
+                
+                // CRITICAL: Prevent OutOfMemoryError! 
+                // If the network is slow, OkHttp queues frames in RAM. If it exceeds 2MB, drop the frame!
+                if ((webSocket?.queueSize() ?: 0L) > 2_000_000L) {
+                    Log.w(TAG, "Network queue is too large! Dropping video frame.")
+                    imageProxy.close()
+                    return@setAnalyzer
+                }
+                
                 lastFrameTimeMs = currentTime
 
                 try {
@@ -225,6 +234,8 @@ class MainActivity : ComponentActivity() {
                     webSocket?.send(payload.toByteString())
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing frame", e)
+                } catch (e: Error) {
+                    Log.e(TAG, "Fatal Error processing frame (OOM)", e)
                 } finally {
                     imageProxy.close() // ALWAYS close to get the next frame
                 }
