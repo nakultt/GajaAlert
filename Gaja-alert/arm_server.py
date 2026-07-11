@@ -33,6 +33,36 @@ except OSError as e:
     AUDIO_ENABLED = False
 import queue
 
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger("gaja.server")
+
+cfg = Config.load()
+
+# YOLO local detection (real-time overlay on the display window)
+MODEL_PARAM_PATH = "yolo26n_ncnn_model/model.ncnn.param"
+MODEL_BIN_PATH = "yolo26n_ncnn_model/model.ncnn.bin"
+CONFIDENCE = 0.40
+INPUT_W, INPUT_H = 640, 640
+
+CLASSES = [
+    "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
+    "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
+    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
+    "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
+    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
+    "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
+    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
+    "couch","potted plant","bed","dining table","toilet","tv","laptop","mouse",
+    "remote","keyboard","cell phone","microwave","oven","toaster","sink",
+    "refrigerator","book","clock","vase","scissors","teddy bear","hair drier",
+    "toothbrush"
+]
+
+net = ncnn.Net()
+net.load_param(MODEL_PARAM_PATH)
+net.load_model(MODEL_BIN_PATH)
+
 # Queues to pass data from the async websocket thread to processing threads
 video_queue = queue.Queue(maxsize=2)
 audio_queue = queue.Queue(maxsize=100)
@@ -166,6 +196,11 @@ def start_asyncio_servers():
     asyncio.run(run_servers())
 
 
+def run_vlm(image):
+    """Placeholder: fires when local YOLO detects an elephant in a display frame."""
+    log.info("VLM Activated (image shape=%s)", image.shape)
+
+
 def display_loop():
     """Main-thread OpenCV display (GUI requires main thread on Windows)."""
     try:
@@ -175,6 +210,9 @@ def display_loop():
         while True:
             time.sleep(3600)
 
+    first_detection_frame = None
+    vlm_active = False
+
     log.info("Waiting for frames...")
     while True:
         try:
@@ -182,8 +220,79 @@ def display_loop():
             np_arr = np.frombuffer(payload, np.uint8)
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if frame is not None:
-                cv2.imshow("Edge Video Stream", frame)
-                
+                display = frame.copy()
+                h, w = frame.shape[:2]
+
+                # ---------- Preprocess ----------
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = cv2.resize(img, (INPUT_W, INPUT_H))
+                img = img.astype(np.float32) / 255.0
+                img = np.transpose(img, (2, 0, 1))
+
+                # ---------- Inference ----------
+                with net.create_extractor() as ex:
+                    ex.input("in0", ncnn.Mat(img).clone())
+                    _, out0 = ex.extract("out0")
+
+                    arr = np.array(out0).T  # shape: (8400, 84)
+
+                    boxes = arr[:, :4]
+                    scores = np.max(arr[:, 4:], axis=1)
+                    class_ids = np.argmax(arr[:, 4:], axis=1)
+
+                    mask = scores > CONFIDENCE
+                    boxes = boxes[mask]
+                    scores = scores[mask]
+                    class_ids = class_ids[mask]
+
+                    elephant_found = False
+
+                    if len(boxes) > 0:
+                        x = boxes[:, 0] - boxes[:, 2] / 2
+                        y = boxes[:, 1] - boxes[:, 3] / 2
+                        bw = boxes[:, 2]
+                        bh = boxes[:, 3]
+                        boxes_xywh = np.stack((x, y, bw, bh), axis=1)
+
+                        indices = cv2.dnn.NMSBoxes(boxes_xywh.tolist(), scores.tolist(), CONFIDENCE, 0.45)
+
+                        for i in indices:
+                            idx = i if isinstance(i, int) else i[0]
+                            box = boxes_xywh[idx]
+                            class_id = class_ids[idx]
+                            score = scores[idx]
+                            label = CLASSES[class_id]
+
+                            x1 = int(box[0] * w / INPUT_W)
+                            y1 = int(box[1] * h / INPUT_H)
+                            x2 = int((box[0] + box[2]) * w / INPUT_W)
+                            y2 = int((box[1] + box[3]) * h / INPUT_H)
+
+                            cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(
+                                display,
+                                f"{label} {score:.2f}",
+                                (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                (0, 255, 0),
+                                2,
+                            )
+
+                            if label == "elephant":
+                                elephant_found = True
+                                if first_detection_frame is None:
+                                    first_detection_frame = frame.copy()
+                                if not vlm_active:
+                                    vlm_active = True
+                                    run_vlm(first_detection_frame)
+
+                    if not elephant_found:
+                        first_detection_frame = None
+                        vlm_active = False
+
+                cv2.imshow("Edge Video Stream", display)
+
         except queue.Empty:
             pass
 
