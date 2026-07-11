@@ -2,8 +2,17 @@ import asyncio
 import websockets
 import cv2
 import numpy as np
-import sounddevice as sd
 import threading
+import queue
+import time
+
+# Attempt to load sounddevice (often fails on Windows ARM64 due to missing DLLs)
+try:
+    import sounddevice as sd
+    AUDIO_ENABLED = True
+except OSError as e:
+    print(f"[Warning] Audio playback disabled: {e}")
+    AUDIO_ENABLED = False
 import queue
 
 # Queues to pass data from async websocket thread to main processing threads
@@ -12,6 +21,10 @@ audio_queue = queue.Queue(maxsize=50)
 
 # 1. AUDIO THREAD
 def audio_player_thread():
+    if not AUDIO_ENABLED:
+        print("[Audio] Audio playback disabled.")
+        return
+
     # Android is sending 16kHz, Mono, 16-bit PCM
     stream = sd.OutputStream(samplerate=16000, channels=1, dtype='int16')
     stream.start()
