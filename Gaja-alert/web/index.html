@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gaja Alert - Hybrid Gemma 4 Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Grotesk:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #08090c;
+            --panel-bg: rgba(18, 20, 29, 0.65);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f0f2f5;
+            --text-secondary: #9ea3b0;
+            --cyan-glow: #00f2fe;
+            --blue-glow: #4facfe;
+            --npu-accent: #ff007f;
+            --accent-gradient: linear-gradient(135deg, var(--cyan-glow) 0%, var(--blue-glow) 100%);
+            --user-bubble: linear-gradient(135deg, #1d2636 0%, #151a24 100%);
+            --model-bubble: linear-gradient(135deg, #111e2e 0%, #0d1520 100%);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(0, 242, 254, 0.03) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(79, 172, 254, 0.03) 0%, transparent 40%);
+        }
+
+        #app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+            border: 1px solid var(--border-color);
+        }
+
+        /* Side Dashboard Panel */
+        #sidebar {
+            width: 320px;
+            background-color: var(--panel-bg);
+            border-right: 1px solid var(--border-color);
+            backdrop-filter: blur(20px);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            overflow-y: auto;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--accent-gradient);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #000;
+            font-family: 'Space Grotesk', sans-serif;
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.4);
+        }
+
+        .logo-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .card-header {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-header::before {
+            content: '';
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--cyan-glow);
+            box-shadow: 0 0 8px var(--cyan-glow);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+        }
+
+        .stat-value {
+            font-weight: 600;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .badge-cyan {
+            background-color: rgba(0, 242, 254, 0.15);
+            color: var(--cyan-glow);
+            border: 1px solid rgba(0, 242, 254, 0.3);
+        }
+
+        .badge-magenta {
+            background-color: rgba(255, 0, 127, 0.15);
+            color: var(--npu-accent);
+            border: 1px solid rgba(255, 0, 127, 0.3);
+        }
+
+        /* Hardware Layer Map Visualization */
+        .hardware-map {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .map-bar {
+            height: 24px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: #fff;
+        }
+
+        .map-npu {
+            background: linear-gradient(90deg, rgba(255, 0, 127, 0.3), rgba(255, 0, 127, 0.05));
+            border: 1px solid rgba(255, 0, 127, 0.4);
+            box-shadow: inset 0 0 10px rgba(255, 0, 127, 0.1);
+        }
+
+        .map-gpu {
+            background: linear-gradient(90deg, rgba(0, 242, 254, 0.3), rgba(0, 242, 254, 0.05));
+            border: 1px solid rgba(0, 242, 254, 0.4);
+            box-shadow: inset 0 0 10px rgba(0, 242, 254, 0.1);
+        }
+
+        /* Chat Window Area */
+        #chat-area {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(8, 9, 12, 0.2);
+        }
+
+        #chat-header {
+            height: 72px;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: rgba(18, 20, 29, 0.4);
+            backdrop-filter: blur(10px);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--cyan-glow);
+            box-shadow: 0 0 10px var(--cyan-glow);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 15px var(--cyan-glow); }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        #messages-container {
+            flex-grow: 1;
+            padding: 24px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Chat Bubbles styling */
+        .message-row {
+            display: flex;
+            width: 100%;
+        }
+
+        .msg-user {
+            justify-content: flex-end;
+        }
+
+        .msg-model {
+            justify-content: flex-start;
+        }
+
+        .bubble {
+            max-width: 75%;
+            padding: 16px 20px;
+            border-radius: 16px;
+            font-size: 15px;
+            line-height: 1.6;
+            letter-spacing: 0.2px;
+            animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            word-wrap: break-word;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .bubble-user {
+            background: var(--user-bubble);
+            border-bottom-right-radius: 4px;
+            color: var(--text-primary);
+        }
+
+        .bubble-model {
+            background: var(--model-bubble);
+            border-bottom-left-radius: 4px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Input area styling */
+        #input-container {
+            padding: 20px 24px;
+            border-top: 1px solid var(--border-color);
+            background-color: rgba(18, 20, 29, 0.4);
+            backdrop-filter: blur(10px);
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        textarea {
+            flex-grow: 1;
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 14px 16px;
+            color: var(--text-primary);
+            font-size: 15px;
+            resize: none;
+            height: 52px;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        textarea:focus {
+            border-color: rgba(0, 242, 254, 0.4);
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.1);
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        button {
+            background: var(--accent-gradient);
+            border: none;
+            border-radius: 12px;
+            width: 52px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+        }
+
+        button:hover {
+            transform: scale(1.03);
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.4);
+        }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+        button svg {
+            width: 20px;
+            height: 20px;
+            fill: #000;
+        }
+
+        /* Typing indicator styling */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 8px 12px;
+        }
+
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--cyan-glow);
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <!-- Sidebar Dashboard -->
+        <div id="sidebar">
+            <div class="logo-container">
+                <div class="logo-icon">G4</div>
+                <div class="logo-title">Gaja Hybrid Chat</div>
+            </div>
+
+            <!-- Model Card -->
+            <div class="card">
+                <div class="card-header">Model Info</div>
+                <div class="stat-row">
+                    <span class="stat-label">Model:</span>
+                    <span class="stat-value">Gemma 4 E2B</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Quant:</span>
+                    <span class="stat-value">Q4_0 (QAT)</span>
+                </div>
+            </div>
+
+            <!-- Accelerator Split Card -->
+            <div class="card">
+                <div class="card-header">Pipeline Layout</div>
+                <div class="stat-row">
+                    <span class="stat-label">Layers 0–16:</span>
+                    <span class="badge badge-magenta">NPU (HTP)</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Layers 17–35:</span>
+                    <span class="badge badge-cyan">GPU (OpenCL)</span>
+                </div>
+                <div class="hardware-map">
+                    <div class="map-bar map-npu">NPU: 17 Layers</div>
+                    <div class="map-bar map-gpu">GPU: 19 Layers</div>
+                </div>
+            </div>
+
+            <!-- Telemetry Stats Card -->
+            <div class="card">
+                <div class="card-header">Telemetry Info</div>
+                <div class="stat-row">
+                    <span class="stat-label">Last Latency:</span>
+                    <span class="stat-value" id="stat-latency">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Chat Area -->
+        <div id="chat-area">
+            <div id="chat-header">
+                <div class="status-indicator">
+                    <div class="pulse-dot"></div>
+                    <span>Active Server (:8082)</span>
+                </div>
+            </div>
+
+            <div id="messages-container">
+                <!-- Welcome Message -->
+                <div class="message-row msg-model">
+                    <div class="bubble bubble-model">
+                        Hello! I am **Gemma 4 E2B**, running locally on a hybrid NPU + GPU pipeline setup. My first 17 layers are accelerated on the Qualcomm Hexagon NPU, and the remaining 19 layers run on the Adreno GPU. 
+                        <br><br>
+                        Ask me anything to test the local inference speed!
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input bar -->
+            <div id="input-container">
+                <div class="input-wrapper">
+                    <textarea id="chat-input" placeholder="Type your message here... (Press Enter to send)" rows="1"></textarea>
+                    <button id="send-btn" onclick="sendMessage()">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const inputField = document.getElementById('chat-input');
+        const container = document.getElementById('messages-container');
+        const latencyStat = document.getElementById('stat-latency');
+
+        // Automatic resizing input field
+        inputField.addEventListener('input', () => {
+            inputField.style.height = 'auto';
+            inputField.style.height = (inputField.scrollHeight) + 'px';
+        });
+
+        // Submit on Enter (Shift+Enter for new line)
+        inputField.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        function appendMessage(sender, text) {
+            const row = document.createElement('div');
+            row.className = `message-row msg-${sender}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = `bubble bubble-${sender}`;
+            
+            // Basic line break and markdown bold formatting
+            let formatted = text
+                .replace(/\n/g, '<br>')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            bubble.innerHTML = formatted;
+            row.appendChild(bubble);
+            container.appendChild(row);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function appendTypingIndicator() {
+            const row = document.createElement('div');
+            row.className = 'message-row msg-model';
+            row.id = 'typing-indicator-row';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble bubble-model typing-indicator';
+            bubble.innerHTML = `
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            `;
+            
+            row.appendChild(bubble);
+            container.appendChild(row);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator-row');
+            if (indicator) {
+                indicator.remove();
+            }
+        }
+
+        async function sendMessage() {
+            const text = inputField.value.trim();
+            if (!text) return;
+
+            inputField.value = '';
+            inputField.style.height = '52px'; // Reset height
+
+            appendMessage('user', text);
+            appendTypingIndicator();
+
+            try {
+                // Collect history
+                const messageElements = container.querySelectorAll('.message-row');
+                const messages = [];
+                
+                // Construct basic payload context
+                messages.push({
+                    role: 'user',
+                    content: text
+                });
+
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: messages,
+                        temperature: 0.2,
+                        max_tokens: 256,
+                        chat_template_kwargs: { enable_thinking: false }
+                    })
+                });
+
+                const data = await response.json();
+                removeTypingIndicator();
+
+                if (data.choices && data.choices[0]) {
+                    const reply = data.choices[0].message.content;
+                    appendMessage('model', reply);
+                    if (data.timings && data.timings.wall_s) {
+                        latencyStat.textContent = `${data.timings.wall_s.toFixed(2)}s`;
+                    }
+                } else if (data.error) {
+                    appendMessage('model', `Error: ${data.error}`);
+                } else {
+                    appendMessage('model', 'Received unexpected response format.');
+                }
+            } catch (err) {
+                removeTypingIndicator();
+                appendMessage('model', `Failed to connect to local server: ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>
