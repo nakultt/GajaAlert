@@ -15,10 +15,6 @@ def run_vision_inference(payload_bytes: bytes):
     # OpenCV processing would go here if needed locally
     print(f"[Arduino Vision] Running inference on frame payload of size: {len(payload_bytes)} bytes")
 
-def run_audio_inference(payload_bytes: bytes):
-    """Stub function for local Audio Inference on Arduino."""
-    print(f"[Arduino Audio] Running inference on audio chunk of size: {len(payload_bytes)} bytes")
-
 async def forward_to_arm_pc():
     global arm_pc_socket
     uri = f"ws://{ARM_PC_IP}:{ARM_PC_PORT}"
@@ -51,8 +47,6 @@ async def handle_mobile_client(websocket):
                 
                 if header == 0x01:
                     run_vision_inference(payload)
-                elif header == 0x02:
-                    run_audio_inference(payload)
                 
                 # Instantly push the exact original message (with header) to the ARM PC
                 if arm_pc_socket is not None:
@@ -65,9 +59,6 @@ async def handle_mobile_client(websocket):
                                 )
                             else:
                                 pass # Drop frame to maintain 0ms latency
-                        else:
-                            # AUDIO: Audio is tiny, send with a 50ms timeout to avoid deadlocks
-                            await asyncio.wait_for(arm_pc_socket.send(message), timeout=0.05)
                     except Exception:
                         pass # Ignore send timeouts, connection loop handles reconnects
     except websockets.exceptions.ConnectionClosed:

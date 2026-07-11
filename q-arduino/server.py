@@ -2,26 +2,10 @@ import asyncio
 import websockets
 import cv2
 import numpy as np
-import sounddevice as sd
-import threading
 import queue
 
 # Queues to pass data from async websocket thread to main processing threads
 video_queue = queue.Queue(maxsize=10)
-audio_queue = queue.Queue(maxsize=50)
-
-# 1. AUDIO THREAD
-def audio_player_thread():
-    # Android is sending 16kHz, Mono, 16-bit PCM
-    stream = sd.OutputStream(samplerate=16000, channels=1, dtype='int16')
-    stream.start()
-    print("[Audio] Player started")
-    while True:
-        try:
-            audio_chunk = audio_queue.get()
-            stream.write(audio_chunk)
-        except Exception as e:
-            print(f"Audio playback error: {e}")
 
 # 2. WEBSOCKET ASYNC SERVER
 async def handler(websocket):
@@ -38,11 +22,6 @@ async def handler(websocket):
                 # Drop frames if queue is full to avoid lag
                 if not video_queue.full():
                     video_queue.put(payload)
-            elif header == 0x02: # Audio
-                # Convert bytes to numpy int16 array
-                audio_data = np.frombuffer(payload, dtype=np.int16)
-                if not audio_queue.full():
-                    audio_queue.put(audio_data)
             else:
                 print(f"Unknown header: {header}")
     except websockets.exceptions.ConnectionClosed:
@@ -57,9 +36,6 @@ def start_asyncio_server():
     asyncio.run(run_server())
 
 if __name__ == "__main__":
-    # Start Audio thread
-    threading.Thread(target=audio_player_thread, daemon=True).start()
-    
     # Start WebSocket server in a background thread
     threading.Thread(target=start_asyncio_server, daemon=True).start()
 
