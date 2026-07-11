@@ -16,14 +16,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.mobile.ui.theme.MobileTheme
 import okhttp3.*
@@ -34,7 +35,6 @@ import kotlin.concurrent.thread
 class MainActivity : ComponentActivity() {
 
     private val TAG = "EdgeStreaming"
-    private val WS_URL = "ws://10.42.0.1:8000/stream"
 
     private var webSocket: WebSocket? = null
     private val client = OkHttpClient()
@@ -42,8 +42,11 @@ class MainActivity : ComponentActivity() {
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private var audioRecord: AudioRecord? = null
     private var isStreamingAudio = false
+    private var isConnected by mutableStateOf(false)
 
-    private var streamingStatus by mutableStateOf("Initializing...")
+    private var streamingStatus by mutableStateOf("Ready to connect")
+
+    private var pendingIpAddress = ""
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
@@ -51,8 +54,8 @@ class MainActivity : ComponentActivity() {
             val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
 
             if (cameraGranted && audioGranted) {
-                streamingStatus = "Permissions granted. Connecting to WebSocket..."
-                connectWebSocket()
+                streamingStatus = "Permissions granted. Connecting..."
+                connectWebSocket(pendingIpAddress)
             } else {
                 streamingStatus = "Permissions denied. Cannot stream."
             }
@@ -63,25 +66,54 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MobileTheme {
+                var ipAddress by remember { mutableStateOf("192.168.") }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        modifier = Modifier
+                            .padding(innerPadding)
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        OutlinedTextField(
+                            value = ipAddress,
+                            onValueChange = { ipAddress = it },
+                            label = { Text("Arduino IP Address") },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isConnected
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                if (isConnected) {
+                                    disconnectWebSocket()
+                                } else {
+                                    checkPermissionsAndConnect(ipAddress)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (isConnected) "Disconnect" else "Connect")
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(text = streamingStatus)
                     }
                 }
             }
         }
-
-        checkPermissions()
     }
 
-    private fun checkPermissions() {
+    private fun checkPermissionsAndConnect(ipAddress: String) {
+        pendingIpAddress = ipAddress
         val cameraPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
         val audioPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
 
         if (cameraPermission == PackageManager.PERMISSION_GRANTED &&
             audioPermission == PackageManager.PERMISSION_GRANTED) {
-            streamingStatus = "Connecting to WebSocket..."
-            connectWebSocket()
+            streamingStatus = "Connecting..."
+            connectWebSocket(ipAddress)
         } else {
             requestPermissionLauncher.launch(
                 arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
@@ -89,12 +121,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun connectWebSocket() {
-        val request = Request.Builder().url(WS_URL).build()
+    private fun connectWebSocket(ip: String) {
+        val url = "ws://$ip:8000/"
+        val request = Request.Builder().url(url).build()
+        
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket Opened")
-                streamingStatus = "Streaming connected to $WS_URL"
+                streamingStatus = "Streaming connected to $url"
+                isConnected = true
                 runOnUiThread {
                     startCamera()
                     startAudio()
@@ -104,15 +139,25 @@ class MainActivity : ComponentActivity() {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "WebSocket Closed")
                 streamingStatus = "WebSocket Closed"
+                isConnected = false
                 stopStreaming()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket Failure", t)
                 streamingStatus = "WebSocket Error: ${t.message}"
+                isConnected = false
                 stopStreaming()
             }
         })
+    }
+
+    private fun disconnectWebSocket() {
+        webSocket?.close(1000, "User disconnected")
+        webSocket = null
+        isConnected = false
+        streamingStatus = "Disconnected"
+        stopStreaming()
     }
 
     private fun startCamera() {
