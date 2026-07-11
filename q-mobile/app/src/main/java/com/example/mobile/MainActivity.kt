@@ -203,14 +203,15 @@ class MainActivity : ComponentActivity() {
             var lastFrameTimeMs = 0L
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                try {
-                    val currentTime = System.currentTimeMillis()
-                    // Throttle to roughly 15 FPS (1000ms / 15 = 66ms)
-                    if (currentTime - lastFrameTimeMs < 66) {
-                        return@setAnalyzer
-                    }
-                    lastFrameTimeMs = currentTime
+                val currentTime = System.currentTimeMillis()
+                // Throttle to roughly 15 FPS (1000ms / 15 = 66ms)
+                if (currentTime - lastFrameTimeMs < 66) {
+                    imageProxy.close()
+                    return@setAnalyzer
+                }
+                lastFrameTimeMs = currentTime
 
+                try {
                     val bitmap = imageProxy.toBitmap()
                     val stream = java.io.ByteArrayOutputStream()
                     // Heavy compression (40) to prevent TCP buffer bloat while maintaining 640x480 size
