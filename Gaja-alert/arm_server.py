@@ -12,26 +12,17 @@ import logging
 import queue
 import threading
 import time
+import datetime
 
 import cv2
 import numpy as np
 import websockets
 
-from gaja.audio_trigger import BandTrigger
 from gaja.config import Config
-from gaja.incidents import IncidentLog
 from gaja.llm import GemmaClient
-from gaja.pipeline import Pipeline
+from sarvam_workflow import run_sarvam_workflow
 import ncnn
 
-# Attempt to load sounddevice (often fails on Windows ARM64 due to missing DLLs)
-try:
-    import sounddevice as sd
-    AUDIO_ENABLED = True
-except OSError as e:
-    print(f"[Warning] Audio playback disabled: {e}")
-    AUDIO_ENABLED = False
-import queue
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -65,7 +56,6 @@ net.load_model(MODEL_BIN_PATH)
 
 # Queues to pass data from the async websocket thread to processing threads
 video_queue = queue.Queue(maxsize=2)
-audio_queue = queue.Queue(maxsize=100)
 
 # Latest raw JPEG for the pipeline (no re-encode, no queue contention)
 _frame_lock = threading.Lock()
@@ -103,38 +93,8 @@ def send_alert(payload: bytes):
             log.error("Failed to queue alert for a receiver: %s", e)
 
 
-# Pipeline wiring
-trigger = BandTrigger(cfg)
+# 1. Pipeline wiring (Legacy Audio Pipeline removed)
 llm = GemmaClient(cfg)
-pipeline = Pipeline(cfg, llm, frame_source, send_alert, IncidentLog(cfg))
-
-
-# 1. AUDIO THREAD: single consumer — optional playback + trigger detection
-def audio_consumer_thread():
-    stream = None
-    if AUDIO_ENABLED:
-        try:
-            # Android sends 16kHz, Mono, 16-bit PCM
-            stream = sd.OutputStream(samplerate=cfg.sample_rate, channels=1, dtype='int16')
-            stream.start()
-            log.info("Audio playback started")
-        except Exception as e:
-            log.warning("Audio playback unavailable: %s", e)
-            stream = None
-    while True:
-        chunk = audio_queue.get()
-        if stream is not None:
-            try:
-                stream.write(chunk)
-            except Exception as e:
-                log.error("Audio playback error: %s", e)
-                stream = None
-        try:
-            ev = trigger.feed(chunk)
-            if ev is not None:
-                pipeline.notify_trigger(ev)
-        except Exception:
-            log.exception("Trigger processing error")
 
 
 # 2. WEBSOCKET SERVERS
@@ -157,10 +117,6 @@ async def sensor_handler(websocket):
                     except queue.Empty:
                         pass
                 video_queue.put(payload)
-            elif header == 0x02:  # Audio
-                audio_data = np.frombuffer(payload, dtype=np.int16)
-                if not audio_queue.full():
-                    audio_queue.put(audio_data)
             else:
                 log.warning("Unknown header: %s", header)
     except websockets.exceptions.ConnectionClosed:
@@ -196,9 +152,45 @@ def start_asyncio_servers():
     asyncio.run(run_servers())
 
 
+def vlm_thread_target(image):
+    global vlm_active
+    try:
+        log.info("VLM thread started. Encoding frame...")
+        ret, buffer = cv2.imencode('.jpg', image)
+        if not ret:
+            log.error("Failed to encode frame to JPEG")
+            return
+        jpeg_bytes = buffer.tobytes()
+        
+        log.info("Sending frame to Gemma vision for confirmation...")
+        det = llm.detect_elephant([jpeg_bytes])
+        
+        if det is None:
+            log.error("Gemma vision server unreachable.")
+            return
+            
+        if det.elephant:
+            log.info("Gemma confirmed elephant! Confidence: %.2f", det.confidence)
+            when = datetime.datetime.now().strftime("%I:%M %p")
+            alert = llm.generate_alert(det, ratio=1.0, when=when)
+            
+            log.info("Triggering Sarvam MCP tools with alert: %s", alert.report)
+            asyncio.run(run_sarvam_workflow(alert.report))
+            log.info("Sarvam workflow completed successfully.")
+        else:
+            log.info("Gemma did NOT confirm elephant. False positive.")
+    except Exception as e:
+        log.exception("Error in VLM thread")
+    finally:
+        # Reset tracking so we can trigger again
+        # Note: Must use a lock or ensure safe assignment if global usage gets complex. 
+        # Python GIL makes single boolean assignments thread-safe enough for this simple tracking.
+        log.info("VLM processing finished. Re-arming YOLO tracking.")
+        
 def run_vlm(image):
-    """Placeholder: fires when local YOLO detects an elephant in a display frame."""
-    log.info("VLM Activated (image shape=%s)", image.shape)
+    """Fires when local YOLO detects an elephant in a display frame."""
+    log.info("VLM Activated (image shape=%s). Starting background thread.", image.shape)
+    threading.Thread(target=vlm_thread_target, args=(image,), daemon=True).start()
 
 
 def display_loop():
@@ -308,7 +300,5 @@ if __name__ == "__main__":
             log.warning("%s LLM at %s is not responding — start it before an incident",
                         name, base)
 
-    threading.Thread(target=audio_consumer_thread, daemon=True).start()
     threading.Thread(target=start_asyncio_servers, daemon=True).start()
-    pipeline.start()
     display_loop()
