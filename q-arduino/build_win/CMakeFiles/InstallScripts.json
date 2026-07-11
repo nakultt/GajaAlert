@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/Github/q-arduino/build_win/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
