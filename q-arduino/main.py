@@ -60,7 +60,9 @@ async def handle_mobile_client(websocket):
                         if header == 0x01:
                             # VIDEO: Drop frame if previous video frame is still sending!
                             if current_video_task is None or current_video_task.done():
-                                current_video_task = asyncio.create_task(arm_pc_socket.send(message))
+                                current_video_task = asyncio.create_task(
+                                    asyncio.wait_for(arm_pc_socket.send(message), timeout=0.2)
+                                )
                             else:
                                 pass # Drop frame to maintain 0ms latency
                         else:
