@@ -60,6 +60,7 @@ class Handler(BaseHTTPRequestHandler):
             messages = req["messages"]
             max_tokens = int(req.get("max_tokens", 256))
             temperature = float(req.get("temperature", 0.7))
+            stream_requested = bool(req.get("stream", False))
             # Default thinking OFF (detection prompts need direct answers —
             # same rationale as the E4B server). Clients can override via
             # chat_template_kwargs for llama-server API parity.
@@ -70,29 +71,78 @@ class Handler(BaseHTTPRequestHandler):
                 messages, add_generation_prompt=True, enable_thinking=think
             )
             t0 = time.time()
-            with _lock:
-                text = "".join(
-                    _model.generate(
+
+            if stream_requested:
+                # SSE for the web chat UI: yield tokens as llama_cpp produces
+                # them instead of buffering the whole reply first.
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+
+                chat_id = f"chatcmpl-{int(t0)}"
+                with _lock:
+                    for token in _model.generate(
                         prompt,
                         max_new_tokens=max_tokens,
                         temperature=temperature,
                         stream=True,
+                    ):
+                        chunk = {
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": int(t0),
+                            "model": ALIAS,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": token},
+                                "finish_reason": None,
+                            }],
+                        }
+                        self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                        self.wfile.flush()
+
+                final_chunk = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(t0),
+                    "model": ALIAS,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "timings": {"wall_s": round(time.time() - t0, 2)},
+                }
+                self.wfile.write(f"data: {json.dumps(final_chunk)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            else:
+                with _lock:
+                    text = "".join(
+                        _model.generate(
+                            prompt,
+                            max_new_tokens=max_tokens,
+                            temperature=temperature,
+                            stream=True,
+                        )
                     )
-                )
-            self._send(200, {
-                "id": f"chatcmpl-{int(t0)}",
-                "object": "chat.completion",
-                "created": int(t0),
-                "model": ALIAS,
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
-                }],
-                "timings": {"wall_s": round(time.time() - t0, 2)},
-            })
+                self._send(200, {
+                    "id": f"chatcmpl-{int(t0)}",
+                    "object": "chat.completion",
+                    "created": int(t0),
+                    "model": ALIAS,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": text},
+                        "finish_reason": "stop",
+                    }],
+                    "timings": {"wall_s": round(time.time() - t0, 2)},
+                })
         except Exception as e:  # surface errors to the client, keep serving
-            self._send(500, {"error": str(e)})
+            if not self.wfile.closed:
+                try:
+                    self._send(500, {"error": str(e)})
+                except Exception:
+                    pass
 
     def log_message(self, fmt, *args):  # quieter default logging
         print(f"[serve_e2b_npu] {self.address_string()} {fmt % args}")
