@@ -16,8 +16,8 @@ except OSError as e:
 import queue
 
 # Queues to pass data from async websocket thread to main processing threads
-video_queue = queue.Queue(maxsize=10)
-audio_queue = queue.Queue(maxsize=50)
+video_queue = queue.Queue(maxsize=2)
+audio_queue = queue.Queue(maxsize=100)
 
 # 1. AUDIO THREAD
 def audio_player_thread():
