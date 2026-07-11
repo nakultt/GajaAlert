@@ -18,6 +18,9 @@ Usage:
     # With custom threshold
     python test_elephant_classifier.py --threshold 0.65 audio.wav
 
+    # Clip-level aggregation (matches retrained model)
+    python test_elephant_classifier.py --aggregation mean_max_std audio.wav
+
     # Batch test against known datasets (auto-detects labels from folder names)
     python test_elephant_classifier.py --eval dataset/
 
@@ -30,6 +33,7 @@ Requirements:
 
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -39,6 +43,7 @@ import numpy as np
 # Local import  -  must be in the same directory
 from input_processing import (
     audio_to_patches,
+    audio_to_patches_from_waveform,
     load_audio,
     diagnose_audio,
     SAMPLE_RATE,
@@ -54,6 +59,46 @@ XGB_MODEL = os.path.join(OUTPUT_DIR, "elephant_xgb.json")
 YAMNET_QUANTIZED = os.path.join(OUTPUT_DIR, "yamnet_int8.onnx")
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wma"}
+METADATA_PATH = os.path.join(OUTPUT_DIR, "model_metadata.json")
+
+
+# --- Aggregation (matches train_binary_detector.py) --------------------------
+
+def aggregate_embeddings(embeddings: np.ndarray, strategy: str) -> np.ndarray:
+    """Aggregate N patch embeddings into one clip-level feature vector."""
+    mean_emb = np.mean(embeddings, axis=0)
+    if strategy == "mean":
+        return mean_emb
+    max_emb = np.max(embeddings, axis=0)
+    if strategy == "mean_max":
+        return np.concatenate([mean_emb, max_emb])
+    std_emb = np.std(embeddings, axis=0)
+    return np.concatenate([mean_emb, max_emb, std_emb])
+
+
+def load_default_threshold() -> float:
+    """Load threshold from model_metadata.json if available, else 0.5."""
+    if os.path.exists(METADATA_PATH):
+        try:
+            with open(METADATA_PATH, "r") as f:
+                meta = json.load(f)
+            t = meta.get("selected_threshold", 0.5)
+            return float(t)
+        except Exception:
+            pass
+    return 0.5
+
+
+def load_default_aggregation() -> str | None:
+    """Load aggregation strategy from model_metadata.json if available."""
+    if os.path.exists(METADATA_PATH):
+        try:
+            with open(METADATA_PATH, "r") as f:
+                meta = json.load(f)
+            return meta.get("aggregation_strategy")
+        except Exception:
+            pass
+    return None
 
 
 # --- Model Loading --------------------------------------------------------------
@@ -89,9 +134,14 @@ def load_models(use_quantized=False):
 
 # --- Single File Inference -------------------------------------------------------
 
-def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True, profile=False):
+def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True,
+                 profile=False, aggregation=None):
     """
     Run full inference on a single audio file.
+
+    Args:
+        aggregation: None for legacy patch-level averaging,
+                     or 'mean'/'mean_max'/'mean_max_std' for clip-level aggregation.
 
     Returns dict with prediction, confidence, per-patch details, timing.
     """
@@ -125,19 +175,32 @@ def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True, profile
     )[0]  # shape: (N, 1024)
     t_yamnet = time.perf_counter()
 
-    # XGBoost inference: embeddings -> per-patch probabilities
-    patch_probs = clf.predict_proba(embeddings)[:, 1]  # P(elephant) per patch
-    t_xgb = time.perf_counter()
+    total_patches = embeddings.shape[0]
 
-    # Aggregate: average confidence across patches
-    avg_conf = float(np.mean(patch_probs))
-    max_conf = float(np.max(patch_probs))
-    min_conf = float(np.min(patch_probs))
-    prediction = "Elephant" if avg_conf > threshold else "Non-Elephant"
+    if aggregation is not None:
+        # ── Clip-level aggregation (retrained model) ────────────────────
+        clip_features = aggregate_embeddings(embeddings, aggregation)
+        clip_features_2d = clip_features.reshape(1, -1)  # (1, D)
+        clip_prob = float(clf.predict_proba(clip_features_2d)[0, 1])
+        t_xgb = time.perf_counter()
 
-    # Voting: how many patches exceed threshold
-    votes_above = int(np.sum(patch_probs > threshold))
-    total_patches = len(patch_probs)
+        avg_conf = clip_prob
+        max_conf = clip_prob
+        min_conf = clip_prob
+        prediction = "Elephant" if clip_prob > threshold else "Non-Elephant"
+        votes_above = 1 if clip_prob > threshold else 0
+        mode_label = f"clip-level ({aggregation})"
+    else:
+        # ── Legacy: per-patch probability averaging ─────────────────────
+        patch_probs = clf.predict_proba(embeddings)[:, 1]  # P(elephant) per patch
+        t_xgb = time.perf_counter()
+
+        avg_conf = float(np.mean(patch_probs))
+        max_conf = float(np.max(patch_probs))
+        min_conf = float(np.min(patch_probs))
+        prediction = "Elephant" if avg_conf > threshold else "Non-Elephant"
+        votes_above = int(np.sum(patch_probs > threshold))
+        mode_label = "patch-level avg (legacy)"
 
     result = {
         "filename": filename,
@@ -150,6 +213,7 @@ def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True, profile
         "votes_above_threshold": votes_above,
         "duration_s": diag["duration_s"],
         "issues": diag["issues"],
+        "aggregation": aggregation or "patch_avg",
         "timing": {
             "load_ms": (t_load - t0) * 1000,
             "preprocess_ms": (t_preprocess - t_load) * 1000,
@@ -162,10 +226,12 @@ def predict_file(path, yamnet_session, clf, threshold=0.5, verbose=True, profile
     if verbose:
         print(f"  File:        {filename}")
         print(f"  Duration:    {diag['duration_s']:.2f}s -> {total_patches} patch(es)")
+        print(f"  Mode:        {mode_label}")
         print(f"  Prediction:  {prediction}")
-        print(f"  Avg conf:    {avg_conf:.2%}")
-        print(f"  Patch range: {min_conf:.2%} - {max_conf:.2%}")
-        print(f"  Votes:       {votes_above}/{total_patches} patches above {threshold}")
+        print(f"  Confidence:  {avg_conf:.2%}")
+        if aggregation is None:
+            print(f"  Patch range: {min_conf:.2%} - {max_conf:.2%}")
+            print(f"  Votes:       {votes_above}/{total_patches} patches above {threshold}")
 
         if profile:
             t = result["timing"]
@@ -216,7 +282,8 @@ def infer_ground_truth(filepath):
     return "Unknown"
 
 
-def batch_test(input_path, yamnet_session, clf, threshold=0.5, profile=False, eval_mode=False):
+def batch_test(input_path, yamnet_session, clf, threshold=0.5, profile=False,
+               eval_mode=False, aggregation=None):
     """Run inference on all audio files in a folder."""
     files = find_audio_files(input_path)
     if not files:
@@ -229,7 +296,9 @@ def batch_test(input_path, yamnet_session, clf, threshold=0.5, profile=False, ev
     results = []
     for i, fpath in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] ", end="")
-        result = predict_file(fpath, yamnet_session, clf, threshold, verbose=True, profile=profile)
+        result = predict_file(fpath, yamnet_session, clf, threshold,
+                             verbose=True, profile=profile,
+                             aggregation=aggregation)
         if result:
             if eval_mode:
                 result["ground_truth"] = infer_ground_truth(fpath)
@@ -371,8 +440,11 @@ Examples:
         """
     )
     parser.add_argument("input", nargs="?", help="Audio file or folder path")
-    parser.add_argument("--threshold", type=float, default=0.5,
-                       help="Classification threshold (default: 0.5)")
+    parser.add_argument("--threshold", type=float, default=None,
+                       help="Classification threshold (default: auto from model_metadata.json or 0.5)")
+    parser.add_argument("--aggregation", type=str, default=None,
+                       choices=["mean", "mean_max", "mean_max_std"],
+                       help="Clip-level aggregation strategy (matches retrained model)")
     parser.add_argument("--profile", action="store_true",
                        help="Show per-stage timing breakdown")
     parser.add_argument("--eval", action="store_true",
@@ -397,6 +469,18 @@ Examples:
         print(f"ERROR: Path not found: {args.input}")
         sys.exit(1)
 
+    # Resolve aggregation and threshold from metadata if not specified
+    aggregation = args.aggregation
+    if aggregation is None:
+        aggregation = load_default_aggregation()
+        if aggregation:
+            print(f"[Auto] Using aggregation from model_metadata.json: {aggregation}")
+
+    threshold = args.threshold
+    if threshold is None:
+        threshold = load_default_threshold()
+        print(f"[Auto] Using threshold from model_metadata.json: {threshold}")
+
     # Load models
     yamnet_session, clf = load_models(use_quantized=args.quantized)
 
@@ -405,13 +489,15 @@ Examples:
         print(f"\n{'='*60}")
         result = predict_file(
             args.input, yamnet_session, clf,
-            threshold=args.threshold, verbose=True, profile=args.profile
+            threshold=threshold, verbose=True, profile=args.profile,
+            aggregation=aggregation
         )
         print(f"{'='*60}")
     else:
         batch_test(
             args.input, yamnet_session, clf,
-            threshold=args.threshold, profile=args.profile, eval_mode=args.eval
+            threshold=threshold, profile=args.profile, eval_mode=args.eval,
+            aggregation=aggregation
         )
 
 

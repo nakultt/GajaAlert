@@ -10,10 +10,16 @@ data/
 # Project output / cache
 test_results.csv
 output/elephant_embeddings.npz
+elephant_embeddings.npz
 __pycache__/
 *.py[cod]
 *$py.class
 .ipynb_checkpoints/
+
+# Training artifacts
+training_results/
+*.pt
+*.ckpt
 
 # Virtual Environments
 venv/
