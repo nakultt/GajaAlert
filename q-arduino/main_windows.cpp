@@ -37,6 +37,8 @@ int main() {
 
                 if (header == 0x01) {
                     std::cout << "[Relay] Forwarding video frame (" << message.size() << " bytes) to ARM PC" << std::endl;
+                } else if (header == 0x02) {
+                    // Audio frame received locally (not forwarded)
                 }
 
                 // Push exact payload to ARM PC
