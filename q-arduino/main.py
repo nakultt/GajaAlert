@@ -40,6 +40,8 @@ async def handle_mobile_client(websocket):
     global arm_pc_socket
     print("[Arduino Server] Mobile Phone connected!")
     
+    current_video_task = None
+    
     try:
         async for message in websocket:
             # We received a binary frame from the phone
@@ -55,9 +57,17 @@ async def handle_mobile_client(websocket):
                 # Instantly push the exact original message (with header) to the ARM PC
                 if arm_pc_socket is not None:
                     try:
-                        await arm_pc_socket.send(message)
+                        if header == 0x01:
+                            # VIDEO: Drop frame if previous video frame is still sending!
+                            if current_video_task is None or current_video_task.done():
+                                current_video_task = asyncio.create_task(arm_pc_socket.send(message))
+                            else:
+                                pass # Drop frame to maintain 0ms latency
+                        else:
+                            # AUDIO: Audio is tiny, send with a 50ms timeout to avoid deadlocks
+                            await asyncio.wait_for(arm_pc_socket.send(message), timeout=0.05)
                     except Exception:
-                        pass # Ignore send errors, the connection loop will handle reconnects
+                        pass # Ignore send timeouts, connection loop handles reconnects
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
