@@ -48,9 +48,13 @@ async def handler(websocket):
             payload = message[1:]
             
             if header == 0x01:  # Video
-                # Drop frames if queue is full to avoid lag
-                if not video_queue.full():
-                    video_queue.put(payload)
+                # If queue is full, drop the OLDEST frame to make room for this NEWEST frame!
+                if video_queue.full():
+                    try:
+                        video_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                video_queue.put(payload)
             elif header == 0x02: # Audio
                 # Convert bytes to numpy int16 array
                 audio_data = np.frombuffer(payload, dtype=np.int16)
