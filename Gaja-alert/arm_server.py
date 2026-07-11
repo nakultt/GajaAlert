@@ -219,7 +219,7 @@ def display_loop():
                 img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = cv2.resize(img, (INPUT_W, INPUT_H))
                 img = img.astype(np.float32) / 255.0
-                img = np.transpose(img, (2, 0, 1))
+                img = np.ascontiguousarray(np.transpose(img, (2, 0, 1)))
 
                 # ---------- Inference ----------
                 with net.create_extractor() as ex:
@@ -248,8 +248,8 @@ def display_loop():
 
                         indices = cv2.dnn.NMSBoxes(boxes_xywh.tolist(), scores.tolist(), CONFIDENCE, 0.45)
 
-                        for i in indices:
-                            idx = i if isinstance(i, int) else i[0]
+                        for idx in np.array(indices).reshape(-1):
+                            idx = int(idx)
                             box = boxes_xywh[idx]
                             class_id = class_ids[idx]
                             score = scores[idx]
@@ -287,6 +287,8 @@ def display_loop():
 
         except queue.Empty:
             pass
+        except Exception:
+            log.exception("Frame processing error")
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
