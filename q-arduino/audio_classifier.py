@@ -2,9 +2,10 @@
 
 Runs on the UNO Q itself, fed directly from the Q-Mobile app's mic stream
 (0x02 chunks arriving over the phone<->UNO-Q websocket in main.py) -- no wav
-files, no separate mic capture. Uses the same models Gaja alert/arm_server.py
-expects a 0x04 event to be backed by (audio/yamnet.onnx + audio/elephant_xgb.json
-at the repo root, one level up from q-arduino/).
+files, no separate mic capture. Models (models/yamnet.onnx + .onnx.data,
+models/elephant_xgb.json) live inside this repo so q-arduino is
+self-contained and deployable to the UNO Q on its own, without needing a
+sibling checkout.
 
 State machine mirrors Gaja alert/gaja/audio_trigger.py's BandTrigger
 (IDLE/COOLDOWN, consecutive-hits-to-fire, hysteresis on release) so the two
@@ -25,7 +26,7 @@ from input_processing import SAMPLE_RATE, audio_to_patches_from_waveform
 
 log = logging.getLogger("qarduino.audio_classifier")
 
-_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "audio")
+_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 YAMNET_ONNX = os.path.join(_MODEL_DIR, "yamnet.onnx")
 XGB_MODEL = os.path.join(_MODEL_DIR, "elephant_xgb.json")
 
