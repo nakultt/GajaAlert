@@ -1,4 +1,4 @@
-package com.example.mobile
+package com.gajaalert.qmobile
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -36,7 +36,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import com.example.mobile.ui.theme.MobileTheme
+import com.gajaalert.qmobile.ui.theme.MobileTheme
 import okhttp3.*
 import okio.ByteString
 import okio.ByteString.Companion.toByteString

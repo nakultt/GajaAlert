@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.mobile"
+    namespace = "com.gajaalert.qmobile"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -12,7 +12,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.mobile"
+        applicationId = "com.gajaalert.qmobile"
         minSdk = 35
         targetSdk = 36
         versionCode = 1

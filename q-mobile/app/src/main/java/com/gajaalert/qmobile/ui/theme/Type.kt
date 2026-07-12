@@ -1,4 +1,4 @@
-package com.example.mobile.ui.theme
+package com.gajaalert.qmobile.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

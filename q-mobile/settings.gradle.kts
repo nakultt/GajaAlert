@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "mobile"
+rootProject.name = "q-mobile"
 include(":app")
  

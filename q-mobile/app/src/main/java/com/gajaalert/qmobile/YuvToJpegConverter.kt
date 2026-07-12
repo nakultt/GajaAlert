@@ -1,4 +1,4 @@
-package com.example.mobile
+package com.gajaalert.qmobile
 
 import android.graphics.ImageFormat
 import android.graphics.Rect
