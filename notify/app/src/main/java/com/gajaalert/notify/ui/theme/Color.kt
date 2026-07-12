@@ -1,4 +1,4 @@
-package com.example.mobile.ui.theme
+package com.gajaalert.notify.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
