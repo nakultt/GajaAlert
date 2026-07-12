@@ -20,14 +20,14 @@ arm_server.py: YOLO sighting ──────┬── UNO Q audio trigger
       │        only reach the vision LLM on hops where YOLO also confirms an elephant
       ▼
 _vlm_check() / verifier_loop() / _run_observation_window()      [arm_server.py]
-      ├─► Gemma 4 E4B + mmproj (llama.cpp, CPU)  http://127.0.0.1:8080
+      ├─► Qwen3-VL-4B W4A16 vision encoder (QAIRT, Hexagon NPU)   :8081
       │      vision confirm: {"elephant", "confidence", "notes"}
       ▼ confirmed (both paths funnel through the same _incident_lock-guarded step,
       │            so a video and audio confirmation of the same sighting can't double-file)
 _handle_verified()
-      ├─► Gemma 4 E2B split (geniex, NPU prefill + GPU decode)  http://127.0.0.1:8082
-      │      detailed report + fallback en/hi/ta alert   (falls back to :8080, then template)
-      ├─► Sarvam MCP agent: summarize, translate, TTS             [sarvam_agent.py]
+      ├─► Qwen3-VL-4B W4A16 (QAIRT, Hexagon NPU)        http://127.0.0.1:8081
+      │      detailed report + fallback en/hi/ta alert   (then template fallback)
+      ├─► Qwen NPU ↔ Sarvam MCP: summarize, translate, TTS        [sarvam_agent.py]
       │      translations become the broadcast alert text; sarvam_languages (default hi/ta)
       │      are *guaranteed* to be translated + spoken even if the tool-calling agent itself
       │      didn't call those tools
@@ -81,21 +81,17 @@ false positives, nothing silently lost either.
    uv sync --extra yolo   # + parked YOLO/QNN experiments
    ```
 2. **Secrets and ports**: copy `.env.example` to `.env` and fill in `SARVAM_API_KEY` (adjust `GAJA_*` ports/LLM endpoints only if you're not using the defaults). `.env` is gitignored — never commit it. See [Configuration](#configuration).
-3. **Models + llama.cpp** (downloads to `%USERPROFILE%\llm`, outside OneDrive):
+3. **Prepare QAIRT/GenieX and start the Qwen NPU server**:
    ```powershell
-   powershell -File scripts\download-models.ps1
+   powershell -File scripts\setup-qwen-npu.ps1
+   powershell -File scripts\serve-qwen-npu.ps1   # :8081 vision + text + MCP decisions
    ```
-4. **Start the LLM servers** (separate terminals):
-   ```powershell
-   powershell -File scripts\serve-llm.ps1                        # :8080 vision (E4B+mmproj, CPU)
-   C:\Users\<you>\llm\geniex-env\Scripts\python.exe scripts\serve_e2b_split.py   # :8082 text (NPU+GPU)
-   ```
-5. **Run the edge server**:
+4. **Run the edge server**:
    ```powershell
    uv run python arm_server.py
    ```
    Missing LLM servers only log warnings — the server keeps running and records incidents with status `llm_down`.
-6. **Point the sensors at the laptop**:
+5. **Point the sensors at the laptop**:
    - Q-Mobile app: connect to the UNO Q (camera → `0x01`, mic → `0x02`, `q-arduino/main.py` on `:8000`).
    - UNO Q (`q-arduino/`): `python main.py <laptop-ip>` — loads `audio_classifier.py` (YAMNet + XGBoost, models bundled at `q-arduino/models/`) once at startup, classifies the Q-Mobile mic stream locally, relays video frames straight through, and reports confirmed audio triggers to the laptop as `0x04`.
    - Receiver phone(s): [gajanotify/notify](https://github.com/Team-Highest/notify) — enter the laptop's IP, tap "Listen for Alerts".
@@ -116,7 +112,7 @@ Key vision-confirm knob to tune in the field: `confirm_confidence` (minimum Gemm
 
 ```powershell
 uv run python scripts/test_inference.py img.jpg  # vision server (:8080) alone
-uv run python scripts/test_split_inference.py    # text server (:8082) alone
+uv run python scripts/test_qwen_npu.py            # text + tool calls (:8081/NPU)
 uv run python scripts/send_test_audio.py [image.jpg] [audio.wav]
                                                  # fake sensor + receiver end-to-end
 ```
@@ -130,7 +126,8 @@ Pass a real elephant photo as `image.jpg` to `send_test_audio.py` to get a confi
 - `sarvam_agent.py` / `sarvam_workflow.py` — Sarvam MCP translation/TTS (`sarvam_agent.py`'s agent loop always tops up `sarvam_languages` even if the LLM didn't call those tools itself)
 - `scripts/` — model download/serving + test clients
 - `../q-arduino/` — UNO Q side: `main.py` (Q-Mobile relay + audio trigger reporting), `audio_classifier.py` (streaming YAMNet+XGBoost classifier), `input_processing.py` (YAMNet mel-spectrogram preprocessing), `models/` (bundled `yamnet.onnx`/`.onnx.data` + `elephant_xgb.json` — self-contained, no sibling checkout needed)
-- `web/index.html` — chat/telemetry UI served by `serve_e2b_split.py` at `/`
+- `scripts/serve_qwen_npu.py` — persistent OpenAI-compatible QAIRT/NPU server with validated tool calls
+- `web/index.html` — legacy Gemma split-server benchmark UI
 - `docs/LOCAL_INFERENCE.md` — engineering log: why llama.cpp CPU won for the LLM, NPU/GPU split findings, ARM64 gotchas
 - **Parked / not wired into the live pipeline:** `gaja/audio_trigger.py` + `gaja/pipeline.py` (the earlier phone-mic band-energy trigger, superseded by the UNO Q classifier), `webcam_inference.py`, `yolo26n-seg.*`, `export_assets/` (YOLO26-seg QNN/NPU — worked in daylight, failed at night, kept for reference), `scripts/serve_e2b_npu.py`, `scripts/test_trigger.py` (tests the parked band trigger)
 

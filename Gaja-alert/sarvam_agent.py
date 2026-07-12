@@ -3,33 +3,36 @@
 Unlike sarvam_workflow.py's fixed summarize -> translate -> speak sequence,
 this lets the vision LLM decide which of the Sarvam MCP tools to call (and
 with what arguments), in an OpenAI-style tool-calling loop against the MCP
-server's live tool list. All four existing tools (including the audio
-streaming one) are exposed exactly as advertised by the server; none of
-sarvam_workflow.py's tool-call logic is touched here.
+server's live tool list. Only the alert-relevant completion, translation, and
+TTS tools are exposed so their schemas fit the NPU model's 4096-token context.
 
-Only the CPU vision server (:8080, llama.cpp started with --jinja) has
-verified tool-calling support in this repo — the NPU-only servers
-(scripts/serve_e2b_npu.py, scripts/serve_e2b_split.py) are minimal HTTP
-handlers that don't implement the OpenAI `tools` request field, so the
-agent loop below talks to :8080 (see gaja/llm.py's chat_with_tools).
+Tool decisions run on the hardware-compiled Qwen QAIRT bundle through
+scripts/serve_qwen_npu.py. The host MCP client performs the actual tool
+operation and feeds each result into the next NPU inference turn.
 """
 
 import asyncio
 import json
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from gaja.tool_protocol import parse_tool_response
 from sarvam_workflow import SARVAM_API_KEY
 
 log = logging.getLogger("gaja.sarvam_agent")
 
 AUDIO_SUBDIR = "audio"
-# The vision server this agent talks to (:8080) is configured with a 32K
-# context window (see docs/LOCAL_INFERENCE.md). Tool results echoed back into
+LANGUAGE_CODES = {
+    "en": "en-IN", "hi": "hi-IN", "bn": "bn-IN", "ta": "ta-IN",
+    "te": "te-IN", "gu": "gu-IN", "kn": "kn-IN", "ml": "ml-IN",
+    "mr": "mr-IN", "pa": "pa-IN", "od": "od-IN",
+}
+# The Qwen NPU bundle has a fixed 4096-token context. Tool results echoed into
 # the conversation on every turn are what actually blow that budget, not the
 # tool schemas -- cap what goes back into history hard, independent of what
 # gets stored in SarvamResult for the dashboard (which keeps the full text).
@@ -54,6 +57,37 @@ class SarvamResult:
     final_message: str = ""
 
 
+def _tool_named(tools, suffix: str) -> str | None:
+    return next((tool.name for tool in tools if tool.name.endswith(suffix)), None)
+
+
+def _result_text(call_result) -> str:
+    text = call_result.content[0].text if call_result.content else ""
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
+    if isinstance(obj, dict) and isinstance(obj.get("translated_text"), str):
+        return obj["translated_text"]
+    return text
+
+
+def _capture_audio(audio_dir: str, lang: str, before: set[str]) -> str | None:
+    """Rename the MCP server's generated WAV to the dashboard's stable name."""
+    candidates = [
+        path for path in os.listdir(audio_dir)
+        if path.lower().endswith(".wav") and path not in before
+    ]
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda name: os.path.getmtime(os.path.join(audio_dir, name)))
+    source = os.path.join(audio_dir, newest)
+    target = os.path.join(audio_dir, f"{lang}.wav")
+    if os.path.abspath(source) != os.path.abspath(target):
+        shutil.move(source, target)
+    return target
+
+
 def _mcp_tool_to_schema(tool) -> dict:
     description = tool.description or ""
     if len(description) > 300:
@@ -69,46 +103,53 @@ def _mcp_tool_to_schema(tool) -> dict:
 
 
 async def _ensure_guaranteed_translations(session, cfg, result: SarvamResult,
-                                           incident_text: str, audio_dir: str):
+                                           incident_text: str, audio_dir: str,
+                                           translate_tool: str | None,
+                                           tts_tool: str | None):
     """Deterministic top-up, called after the tool-calling agent loop
-    finishes (however it finished): guarantees sarvam_translate + tts_speak
+    finishes (however it finished): guarantees translate + TTS
     have actually run for every cfg.sarvam_languages entry, regardless of
     whether the LLM chose to call them on its own. Uses the same MCP
     session, so this is just extra tool calls, not a second connection."""
     for lang in cfg.sarvam_languages:
         lang = lang.lower()
+        language_code = LANGUAGE_CODES.get(lang, lang if "-" in lang else f"{lang}-IN")
         if lang not in result.translations:
+            if not translate_tool:
+                log.error("Sarvam MCP did not advertise a translate tool")
+                continue
             try:
                 log.info("Sarvam agent: guaranteeing translation for %r", lang)
-                call_result = await session.call_tool("sarvam_translate", {
-                    "text": incident_text,
-                    "target_language": lang,
-                    "source_language": "english",
+                call_result = await session.call_tool(translate_tool, {
+                    "input": incident_text,
+                    "target_language_code": language_code,
+                    "source_language_code": "en-IN",
                 })
-                result.translations[lang] = (
-                    call_result.content[0].text if call_result.content else "")
+                result.translations[lang] = _result_text(call_result)
             except Exception:
-                log.exception("Guaranteed sarvam_translate failed for %r", lang)
+                log.exception("Guaranteed translate failed for %r", lang)
                 continue
 
         if lang not in result.audio_files:
+            if not tts_tool:
+                log.error("Sarvam MCP did not advertise a TTS tool")
+                continue
             text_to_speak = result.translations.get(lang) or incident_text
-            audio_path = os.path.join(audio_dir, f"{lang}.wav")
+            before = set(os.listdir(audio_dir))
             try:
                 log.info("Sarvam agent: guaranteeing TTS for %r", lang)
-                await session.call_tool("sarvam_tts_speak", {
+                await session.call_tool(tts_tool, {
                     "text": text_to_speak,
-                    "language": lang,
-                    "output_file": audio_path,
+                    "target_language_code": language_code,
                 })
-                if os.path.isfile(audio_path):
+                audio_path = _capture_audio(audio_dir, lang, before)
+                if audio_path:
                     result.audio_files[lang] = os.path.relpath(
                         audio_path, cfg.incidents_dir).replace(os.sep, "/")
                 else:
-                    log.warning("Guaranteed sarvam_tts_speak for %r reported ok but no file at %s",
-                                lang, audio_path)
+                    log.warning("Guaranteed TTS for %r returned no WAV", lang)
             except Exception:
-                log.exception("Guaranteed sarvam_tts_speak failed for %r", lang)
+                log.exception("Guaranteed TTS failed for %r", lang)
 
 
 async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> SarvamResult:
@@ -117,10 +158,8 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
     the LLM decides, _ensure_guaranteed_translations then tops up any of
     cfg.sarvam_languages it didn't cover, so translate+TTS always happen.
 
-    `sarvam_tts_speak`'s own `output_file` argument is redirected (not its
-    implementation) to incidents/<incident_id>/audio/<language>.wav so the
-    dashboard has a predictable path to serve, regardless of what filename
-    the model itself proposed."""
+    The MCP server writes into incidents/<incident_id>/audio and generated WAV
+    files are renamed to <language>.wav for predictable dashboard paths."""
     result = SarvamResult()
     audio_dir = os.path.join(cfg.incidents_dir, incident_id, AUDIO_SUBDIR)
     os.makedirs(audio_dir, exist_ok=True)
@@ -128,16 +167,32 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
     server_params = StdioServerParameters(
         command="uvx",
         args=["sarvam-mcp"],
-        env={**os.environ, "SARVAM_API_KEY": SARVAM_API_KEY},
+        env={
+            **os.environ,
+            "SARVAM_API_KEY": SARVAM_API_KEY,
+            "SARVAM_MCP_BASE_PATH": os.path.abspath(audio_dir),
+            "SARVAM_AUDIO_OUTPUT_MODE": "files",
+        },
     )
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools_resp = await session.list_tools()
-            tool_defs = [_mcp_tool_to_schema(t) for t in tools_resp.tools]
+            translate_tool = _tool_named(tools_resp.tools, "tools_translate")
+            tts_tool = _tool_named(tools_resp.tools, "tools_tts_stream")
+            llm_tool = _tool_named(tools_resp.tools, "tools_llm_complete")
+            selected_names = {name for name in (translate_tool, tts_tool, llm_tool) if name}
+            relevant_tools = [
+                tool for tool in tools_resp.tools
+                if tool.name in selected_names
+            ]
+            tool_defs = [_mcp_tool_to_schema(t) for t in relevant_tools]
             if not tool_defs:
                 log.warning("Sarvam agent: no MCP tools advertised")
-                await _ensure_guaranteed_translations(session, cfg, result, incident_text, audio_dir)
+                await _ensure_guaranteed_translations(
+                    session, cfg, result, incident_text, audio_dir,
+                    translate_tool, tts_tool,
+                )
                 return result
 
             messages = [
@@ -146,10 +201,16 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
             ]
 
             for turn in range(cfg.sarvam_agent_max_turns):
-                message = llm.chat_with_tools(cfg.vision_llm_base, messages, tool_defs)
+                message = llm.chat_with_tools(cfg.tool_llm_base, messages, tool_defs)
                 if message is None:
                     log.error("Sarvam agent: LLM call failed on turn %d", turn)
                     break
+                if not message.get("tool_calls"):
+                    parsed = parse_tool_response(message.get("content") or "", tool_defs)
+                    if parsed.get("tool_calls"):
+                        message = parsed
+                    elif "tool_calls" in (message.get("content") or ""):
+                        log.warning("Could not parse proposed tool call: %r", message.get("content"))
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     result.final_message = message.get("content") or ""
@@ -165,32 +226,34 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
                         args = {}
 
                     audio_path = None
-                    if name == "sarvam_tts_speak":
-                        lang = str(args.get("language", "unknown")).lower()
+                    if name and name.endswith(("tts_speak", "tts_stream")):
+                        code = str(args.get("target_language_code", "unknown"))
+                        lang = code.split("-", 1)[0].lower()
                         audio_path = os.path.join(audio_dir, f"{lang}.wav")
-                        args["output_file"] = audio_path
+                        before_audio = set(os.listdir(audio_dir))
 
                     log.info("Sarvam agent calling %s(%s)", name, args)
                     try:
                         call_result = await session.call_tool(name, args)
-                        result_text = call_result.content[0].text if call_result.content else "ok"
+                        result_text = _result_text(call_result) or "ok"
                     except Exception as e:
                         log.exception("Sarvam tool %s failed", name)
                         result_text = f"error: {e}"
 
-                    if name == "sarvam_llm_complete" and not result.summary:
+                    if name and name.endswith("llm_complete") and not result.summary:
                         result.summary = result_text
-                    elif name == "sarvam_translate":
-                        lang = str(args.get("target_language", "unknown")).lower()
+                    elif name and name.endswith("translate"):
+                        code = str(args.get("target_language_code", "unknown"))
+                        lang = code.split("-", 1)[0].lower()
                         result.translations[lang] = result_text
-                    elif name == "sarvam_tts_speak" and audio_path:
-                        lang = str(args.get("language", "unknown")).lower()
-                        if os.path.isfile(audio_path):
+                    elif name and name.endswith(("tts_speak", "tts_stream")) and audio_path:
+                        lang = str(args.get("target_language_code", "unknown")).split("-", 1)[0].lower()
+                        captured = _capture_audio(audio_dir, lang, before_audio)
+                        if captured:
                             result.audio_files[lang] = os.path.relpath(
-                                audio_path, cfg.incidents_dir).replace(os.sep, "/")
+                                captured, cfg.incidents_dir).replace(os.sep, "/")
                         else:
-                            log.warning("sarvam_tts_speak reported %r but no file at %s",
-                                        result_text, audio_path)
+                            log.warning("TTS reported %r but no WAV was created", result_text)
 
                     # Full result_text goes into SarvamResult (dashboard)
                     # above; only a capped copy goes back into the LLM's own
@@ -206,7 +269,10 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
             else:
                 log.warning("Sarvam agent hit max turns (%d) without finishing",
                             cfg.sarvam_agent_max_turns)
-            await _ensure_guaranteed_translations(session, cfg, result, incident_text, audio_dir)
+            await _ensure_guaranteed_translations(
+                session, cfg, result, incident_text, audio_dir,
+                translate_tool, tts_tool,
+            )
     return result
 
 

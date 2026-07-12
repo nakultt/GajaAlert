@@ -8,9 +8,9 @@ Two trigger sources feed the same verify/report/alert pipeline:
     opening a cfg.audio_window_s observation window that collects both the
     audio confidence and the live YOLO state; video frames only reach the
     vision LLM on hops where YOLO currently sees an elephant.
-Either source triggers a Gemma vision confirm (:8080) against live frames;
-once confirmed, a report/alert is generated (:8082 NPU/GPU split, falling
-back to :8080), Sarvam MCP translates/TTS's it (guaranteed for
+Either source triggers a Qwen QAIRT/NPU vision confirm (:8081) against live
+frames; once confirmed, the same NPU model generates the report/alert and
+Sarvam MCP translates/TTS's it (guaranteed for
 cfg.sarvam_languages, on top of whatever the tool-calling agent itself
 decides), and the result broadcasts as 0x03 + JSON to receiver phones
 connected on ws://<laptop>:9001. An audio trigger that the window can't
@@ -182,11 +182,9 @@ def start_asyncio_servers():
 
 # Continuous VLM verification, started when YOLO first sees an elephant and
 # closed as soon as YOLO stops seeing one. Verification and the detailed
-# report both need image input, so they go to the CPU vision server
-# (:8080) — the only server here with mmproj; the NPU servers (:8081/:8082)
-# are text-only. Report/alert text generation still prefers the NPU+GPU
-# split server (:8082) via GemmaClient.generate_alert's existing fallback
-# order, unchanged from before.
+# report both need image input; scripts/serve_qwen_npu.py converts incoming
+# OpenAI data URLs into GenieX image inputs for the QAIRT vision encoder.
+# Report/alert text and MCP decisions use the same resident NPU model.
 _elephant_present = threading.Event()
 _verifier_thread: threading.Thread | None = None
 
