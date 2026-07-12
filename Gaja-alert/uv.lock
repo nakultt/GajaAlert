@@ -505,6 +505,7 @@ dependencies = [
     { name = "ncnn" },
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "python-dotenv" },
     { name = "sounddevice" },
     { name = "websockets" },
 ]
@@ -524,6 +525,7 @@ requires-dist = [
     { name = "onnx", marker = "extra == 'yolo'", specifier = ">=1.22.0" },
     { name = "onnxruntime-qnn", marker = "extra == 'yolo'", specifier = "==2.3.0" },
     { name = "opencv-python", specifier = ">=5.0.0.93" },
+    { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "sounddevice", specifier = ">=0.5.5" },
     { name = "ultralytics", marker = "extra == 'yolo'", specifier = ">=8.4.92" },
     { name = "websockets", specifier = ">=16.1" },
