@@ -97,7 +97,7 @@ false positives, nothing silently lost either.
    Missing LLM servers only log warnings — the server keeps running and records incidents with status `llm_down`.
 6. **Point the sensors at the laptop**:
    - Q-Mobile app: connect to the UNO Q (camera → `0x01`, mic → `0x02`, `q-arduino/main.py` on `:8000`).
-   - UNO Q (`q-arduino/`): `python main.py <laptop-ip>` — loads `audio_classifier.py` (YAMNet + XGBoost, models at `audio/` in the repo root) once at startup, classifies the Q-Mobile mic stream locally, relays video frames straight through, and reports confirmed audio triggers to the laptop as `0x04`.
+   - UNO Q (`q-arduino/`): `python main.py <laptop-ip>` — loads `audio_classifier.py` (YAMNet + XGBoost, models bundled at `q-arduino/models/`) once at startup, classifies the Q-Mobile mic stream locally, relays video frames straight through, and reports confirmed audio triggers to the laptop as `0x04`.
    - Receiver phone(s): [gajanotify/notify](https://github.com/Team-Highest/notify) — enter the laptop's IP, tap "Listen for Alerts".
 
 ## Configuration
@@ -129,7 +129,7 @@ Pass a real elephant photo as `image.jpg` to `send_test_audio.py` to get a confi
 - `gaja/` — `config.py` (`.env`/`gaja.json`), `llm.py` (Gemma clients), `incidents.py`, `dashboard.py`
 - `sarvam_agent.py` / `sarvam_workflow.py` — Sarvam MCP translation/TTS (`sarvam_agent.py`'s agent loop always tops up `sarvam_languages` even if the LLM didn't call those tools itself)
 - `scripts/` — model download/serving + test clients
-- `../q-arduino/` — UNO Q side: `main.py` (Q-Mobile relay + audio trigger reporting), `audio_classifier.py` (streaming YAMNet+XGBoost classifier), `input_processing.py` (YAMNet mel-spectrogram preprocessing); models live in `../audio/` at the repo root
+- `../q-arduino/` — UNO Q side: `main.py` (Q-Mobile relay + audio trigger reporting), `audio_classifier.py` (streaming YAMNet+XGBoost classifier), `input_processing.py` (YAMNet mel-spectrogram preprocessing), `models/` (bundled `yamnet.onnx`/`.onnx.data` + `elephant_xgb.json` — self-contained, no sibling checkout needed)
 - `web/index.html` — chat/telemetry UI served by `serve_e2b_split.py` at `/`
 - `docs/LOCAL_INFERENCE.md` — engineering log: why llama.cpp CPU won for the LLM, NPU/GPU split findings, ARM64 gotchas
 - **Parked / not wired into the live pipeline:** `gaja/audio_trigger.py` + `gaja/pipeline.py` (the earlier phone-mic band-energy trigger, superseded by the UNO Q classifier), `webcam_inference.py`, `yolo26n-seg.*`, `export_assets/` (YOLO26-seg QNN/NPU — worked in daylight, failed at night, kept for reference), `scripts/serve_e2b_npu.py`, `scripts/test_trigger.py` (tests the parked band trigger)
