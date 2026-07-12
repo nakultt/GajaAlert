@@ -1,4 +1,4 @@
-package com.example.mobile
+package com.gajaalert.notify
 
 import org.junit.Test
 
