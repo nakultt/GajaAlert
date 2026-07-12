@@ -1,8 +1,7 @@
-"""Gemma clients for the two local servers.
+"""Clients for the local multimodal and NPU language-model servers.
 
-Vision confirmation goes to the llama.cpp E4B+mmproj server (:8080, images).
-Report + trilingual alert text goes to the geniex NPU/GPU split E2B server
-(:8082, text-only), falling back to :8080 and finally a hardcoded template.
+Vision confirmation, report/alert text, and MCP decisions go to Qwen/QAIRT
+on the NPU (:8081), with a hardcoded alert template as the final fallback.
 
 Stdlib urllib only, mirroring scripts/test_inference.py.
 enable_thinking=False is required: Gemma 4's template otherwise burns the
@@ -147,14 +146,15 @@ class GemmaClient:
 
     def chat_with_tools(self, base: str, messages: list, tools: list,
                          max_tokens: int = 500) -> dict | None:
-        """Raw assistant message (incl. tool_calls) for an agentic tool-use
-        loop. Only the CPU vision server (:8080, started with --jinja) has
-        verified OpenAI-style tool-calling support in this repo — the NPU
-        servers' minimal HTTP handlers don't implement the `tools` field."""
+        """Return an OpenAI-style assistant message for an agentic tool loop.
+
+        The Qwen QAIRT server constrains its NPU output to JSON and validates
+        selected tool names before returning this compatible representation.
+        """
         return self._chat_message(base, messages, max_tokens, tools=tools)
 
     def detect_elephant(self, jpegs: list[bytes]) -> Detection | None:
-        """Vision confirmation on :8080. None means the server was unreachable."""
+        """Vision confirmation on Qwen QAIRT/NPU. None means it was unreachable."""
         content = [{"type": "text", "text": DETECT_PROMPT}]
         for jpeg in jpegs:
             b64 = base64.b64encode(jpeg).decode()
@@ -178,7 +178,7 @@ class GemmaClient:
         )
 
     def generate_alert(self, det: Detection, ratio: float, when: str) -> Alert:
-        """Report + en/hi/ta alerts on :8082, then :8080, then a template."""
+        """Report + alerts on NPU :8081, then :8080, then a template."""
         messages = [
             {"role": "system", "content": ALERT_SYSTEM},
             {"role": "user", "content": ALERT_USER_TEMPLATE.format(

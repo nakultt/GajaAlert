@@ -46,12 +46,14 @@ class Config:
     # Languages sarvam_agent.py guarantees translate+TTS for on a confirmed
     # incident, regardless of what the tool-calling agent decides on its own.
     sarvam_languages: list = dataclasses.field(default_factory=lambda: ["hi", "ta"])
-    # :8080 runs with a 32K context (docs/LOCAL_INFERENCE.md); kept low
-    # because each turn's tool calls/results still add up even truncated.
+    # Keep agent turns low because tool calls/results consume the Qwen QAIRT
+    # bundle's fixed 4096-token context even when results are truncated.
     sarvam_agent_max_turns: int = 4
-    # llm endpoints: vision = llama.cpp E4B+mmproj, text = geniex NPU/GPU split E2B
-    vision_llm_base: str = "http://127.0.0.1:8080"
-    text_llm_base: str = "http://127.0.0.1:8082"
+    # Vision, text, and MCP decisions all use the hardware-compiled Qwen
+    # QAIRT VLM bundle on the Hexagon NPU.
+    vision_llm_base: str = "http://127.0.0.1:8081"
+    text_llm_base: str = "http://127.0.0.1:8081"
+    tool_llm_base: str = "http://127.0.0.1:8081"
     llm_timeout_s: float = 500.0
     llm_retries: int = 2
     # servers
