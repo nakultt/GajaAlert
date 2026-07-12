@@ -6,4 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "websockets>=16.1",
+    "onnxruntime>=1.27.0",
+    "xgboost>=3.0.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.1",
+    "numpy>=2.0.0",
 ]

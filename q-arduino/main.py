@@ -1,23 +1,55 @@
 import asyncio
-import websockets
+import datetime
+import json
 import sys
 
+import websockets
+
+from audio_classifier import ElephantAudioClassifier
+
 # Default IP (can be overridden via command line)
-ARM_PC_IP = "localhost" 
+ARM_PC_IP = "localhost"
 ARM_PC_PORT = 9000
 ARDUINO_PORT = 8000
 
 # Global reference to the outgoing connection to ARM PC
 arm_pc_socket = None
 
+print("[Arduino Audio] Loading elephant-sound classifier (YAMNet + XGBoost)...")
+audio_classifier = ElephantAudioClassifier()
+print("[Arduino Audio] Classifier ready.")
+
 def run_vision_inference(payload_bytes: bytes):
     """Stub function for local Vision Inference on Arduino."""
     # OpenCV processing would go here if needed locally
     print(f"[Arduino Vision] Running inference on frame payload of size: {len(payload_bytes)} bytes")
 
-def run_audio_inference(payload_bytes: bytes):
-    """Stub function for local Audio Inference on Arduino."""
-    print(f"[Arduino Audio] Running inference on audio chunk of size: {len(payload_bytes)} bytes")
+async def run_audio_inference(payload_bytes: bytes):
+    """Feeds mic PCM from the phone into the local elephant-sound classifier;
+    on a trigger, reports a compact 0x04 event to the ARM PC instead of
+    forwarding raw audio (arm_server.py's sensor_handler already expects
+    this exact schema)."""
+    # feed_bytes runs blocking ONNX/XGBoost inference on hops; offload to a
+    # thread so it never stalls the event loop (and the 0ms-latency video
+    # relay above it).
+    event = await asyncio.to_thread(audio_classifier.feed_bytes, payload_bytes)
+    if event is None:
+        return
+    print(f"[Arduino Audio] ELEPHANT sound detected (confidence={event.confidence:.2f})")
+    if arm_pc_socket is None:
+        print("[Arduino Audio] No ARM PC connection -- trigger not reported.")
+        return
+    when = datetime.datetime.fromtimestamp(event.timestamp).astimezone().isoformat(timespec="seconds")
+    body = json.dumps({
+        "event": "audio_elephant",
+        "confidence": round(event.confidence, 3),
+        "sound_type": "elephant_vocalization",
+        "timestamp": when,
+    }).encode()
+    try:
+        await asyncio.wait_for(arm_pc_socket.send(b"\x04" + body), timeout=0.5)
+    except Exception as e:
+        print(f"[Arduino Audio] Failed to report trigger to ARM PC: {e}")
 
 async def forward_to_arm_pc():
     global arm_pc_socket
@@ -52,7 +84,7 @@ async def handle_mobile_client(websocket):
                 if header == 0x01:
                     run_vision_inference(payload)
                 elif header == 0x02:
-                    run_audio_inference(payload)
+                    await run_audio_inference(payload)
                 
                 # Instantly push the exact original message (with header) to the ARM PC
                 if arm_pc_socket is not None:
