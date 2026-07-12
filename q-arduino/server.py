@@ -1,65 +1,19 @@
+"""Backward-compatible launcher for the headless Q-Mobile gateway.
+
+The old development viewer decoded video with OpenCV. Production Arduino
+behavior lives in main.py and relays encoded frames without decoding them.
+"""
+
 import asyncio
-import websockets
-import cv2
-import numpy as np
-import queue
+import sys
 
-# Queues to pass data from async websocket thread to main processing threads
-video_queue = queue.Queue(maxsize=10)
+import main as gateway
 
-# 2. WEBSOCKET ASYNC SERVER
-async def handler(websocket):
-    print("Client connected.")
-    try:
-        async for message in websocket:
-            if not isinstance(message, bytes) or len(message) == 0:
-                continue
-                
-            header = message[0]
-            payload = message[1:]
-            
-            if header == 0x01:  # Video
-                # Drop frames if queue is full to avoid lag
-                if not video_queue.full():
-                    video_queue.put(payload)
-            else:
-                print(f"Unknown header: {header}")
-    except websockets.exceptions.ConnectionClosed:
-        print("Client disconnected.")
-
-async def run_server():
-    print("Edge Server (Python) listening on 0.0.0.0:8000")
-    async with websockets.serve(handler, "0.0.0.0", 8000):
-        await asyncio.Future()  # run forever
-
-def start_asyncio_server():
-    asyncio.run(run_server())
 
 if __name__ == "__main__":
-    # Start WebSocket server in a background thread
-    threading.Thread(target=start_asyncio_server, daemon=True).start()
-
-    # Main thread handles OpenCV (GUI requires main thread on Windows)
-    cv2.namedWindow("Edge Video Stream", cv2.WINDOW_NORMAL)
-    print("[Vision] Waiting for frames...")
-    
-    while True:
-        try:
-            # Block until a frame is received (timeout allows window to stay responsive)
-            payload = video_queue.get(timeout=0.1)
-            
-            # Decode JPEG
-            np_arr = np.frombuffer(payload, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            
-            if frame is not None:
-                cv2.imshow("Edge Video Stream", frame)
-                
-        except queue.Empty:
-            pass
-            
-        # OpenCV needs waitKey to render the window
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cv2.destroyAllWindows()
+    if len(sys.argv) > 1:
+        gateway.ARM_PC_IP = sys.argv[1]
+    try:
+        asyncio.run(gateway.main())
+    except KeyboardInterrupt:
+        print("\nShutting down.")

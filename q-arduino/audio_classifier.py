@@ -93,7 +93,9 @@ class ElephantAudioClassifier:
     def feed_bytes(self, payload: bytes) -> "TriggerEvent | None":
         """Convenience wrapper for raw little-endian int16 PCM bytes off the
         websocket (main.py's 0x02 payload)."""
-        chunk = np.frombuffer(payload, dtype=np.int16)
+        if len(payload) % 2:
+            raise ValueError("PCM payload must contain complete int16 samples")
+        chunk = np.frombuffer(payload, dtype="<i2")
         return self.feed(chunk)
 
     def _check(self, window: np.ndarray) -> "TriggerEvent | None":
