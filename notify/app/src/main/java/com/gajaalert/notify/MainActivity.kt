@@ -5,6 +5,10 @@ import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.pm.PackageManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
@@ -16,6 +20,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -33,8 +39,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.gajaalert.notify.ui.theme.MobileTheme
-import okhttp3.*
-import okio.ByteString
 import org.json.JSONObject
 
 /**
@@ -51,7 +55,11 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val RECEIVER_PORT = 9001
-        private const val ALERT_CHANNEL_ID = "elephant_alerts"
+        // Notification-channel sound settings cannot be changed after Android creates
+        // the channel. Use a new ID so existing installs migrate away from the old,
+        // possibly silent channel.
+        private const val ALERT_CHANNEL_ID = "elephant_alerts_v2"
+        private const val LEGACY_ALERT_CHANNEL_ID = "elephant_alerts"
     }
 
     private data class AlertPayload(
@@ -70,14 +78,34 @@ class MainActivity : ComponentActivity() {
         val yoloConfidence: Double?,
     )
 
-    private var webSocket: WebSocket? = null
-    private val client = OkHttpClient()
-
     private var isConnected by mutableStateOf(false)
     private var languagePref by mutableStateOf("en")
     private var latestAlert by mutableStateOf<AlertPayload?>(null)
     private var streamingStatus by mutableStateOf("Ready to connect")
     private var pendingIpAddress = ""
+
+    private val serviceEvents = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                AlertConnectionService.ACTION_STATUS -> {
+                    streamingStatus = intent.getStringExtra(AlertConnectionService.EXTRA_STATUS)
+                        ?: streamingStatus
+                    isConnected = streamingStatus.startsWith("Listening") ||
+                        streamingStatus.startsWith("Connecting") || streamingStatus.contains("retrying")
+                }
+                AlertConnectionService.ACTION_ALERT -> {
+                    val alert = intent.getStringExtra(AlertConnectionService.EXTRA_JSON)
+                        ?.let(::parseAlert) ?: return
+                    latestAlert = alert
+                    if (!alert.alerts.containsKey(languagePref)) {
+                        languagePref = alert.alerts.keys.firstOrNull { it == "en" }
+                            ?: alert.alerts.keys.firstOrNull() ?: languagePref
+                    }
+                    showAlertNotification(alert)
+                }
+            }
+        }
+    }
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -95,6 +123,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         createNotificationChannel()
+        registerReceiver(
+            serviceEvents,
+            IntentFilter().apply {
+                addAction(AlertConnectionService.ACTION_STATUS)
+                addAction(AlertConnectionService.ACTION_ALERT)
+            },
+            RECEIVER_NOT_EXPORTED,
+        )
         setContent {
             MobileTheme {
                 var ipAddress by remember { mutableStateOf("192.168.") }
@@ -104,6 +140,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier
                             .padding(innerPadding)
                             .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
                             .padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Top
@@ -216,9 +253,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createNotificationChannel() {
-        val soundUri: Uri = Settings.System.DEFAULT_NOTIFICATION_URI
+        val soundUri: Uri = Settings.System.DEFAULT_ALARM_ALERT_URI
+            ?: Settings.System.DEFAULT_NOTIFICATION_URI
         val audioAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+            .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
         val channel = NotificationChannel(
@@ -229,7 +267,10 @@ class MainActivity : ComponentActivity() {
             vibrationPattern = longArrayOf(0, 500, 250, 500)
             setSound(soundUri, audioAttributes)
         }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        getSystemService(NotificationManager::class.java).apply {
+            createNotificationChannel(channel)
+            deleteNotificationChannel(LEGACY_ALERT_CHANNEL_ID)
+        }
     }
 
     private fun checkPermissionAndConnect(ipAddress: String) {
@@ -246,43 +287,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectReceiverWebSocket(ip: String) {
-        val url = "ws://$ip:$RECEIVER_PORT/"
-        val request = Request.Builder().url(url).build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "Receiver WebSocket Opened")
-                streamingStatus = "Listening for alerts on $url"
-                isConnected = true
-            }
-
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                val data = bytes.toByteArray()
-                if (data.isEmpty() || data[0] != 0x03.toByte()) return
-                val json = String(data, 1, data.size - 1, Charsets.UTF_8)
-                val alert = parseAlert(json) ?: return
-                runOnUiThread {
-                    latestAlert = alert
-                    if (!alert.alerts.containsKey(languagePref)) {
-                        languagePref = alert.alerts.keys.firstOrNull { it == "en" }
-                            ?: alert.alerts.keys.firstOrNull() ?: languagePref
-                    }
-                    showAlertNotification(alert)
-                }
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "Receiver WebSocket Closed")
-                streamingStatus = "WebSocket Closed"
-                isConnected = false
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Receiver WebSocket Failure", t)
-                streamingStatus = "WebSocket Error: ${t.message}"
-                isConnected = false
-            }
-        })
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, AlertConnectionService::class.java)
+                .setAction(AlertConnectionService.ACTION_START)
+                .putExtra(AlertConnectionService.EXTRA_IP, ip),
+        )
+        isConnected = true
     }
 
     private fun parseAlert(json: String): AlertPayload? {
@@ -331,21 +342,23 @@ class MainActivity : ComponentActivity() {
             .setStyle(NotificationCompat.BigTextStyle().bigText("$text\n\n${alert.report}"))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(this).notify(alert.id.hashCode(), notification)
     }
 
     private fun disconnectWebSocket() {
-        webSocket?.close(1000, "User disconnected")
-        webSocket = null
+        startService(
+            Intent(this, AlertConnectionService::class.java)
+                .setAction(AlertConnectionService.ACTION_STOP)
+        )
         isConnected = false
         streamingStatus = "Disconnected"
     }
 
     override fun onDestroy() {
+        unregisterReceiver(serviceEvents)
         super.onDestroy()
-        webSocket?.close(1000, "Activity Destroyed")
-        client.dispatcher.executorService.shutdown()
     }
 }
