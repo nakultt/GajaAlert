@@ -2,7 +2,10 @@
 
 Streams a low-frequency test tone (or a WAV file) as 0x02 audio chunks and a
 JPEG as repeated 0x01 frames to the sensor port, while a receiver connection
-on the alert port prints any 0x03 alert that comes back.
+on the alert port prints any 0x03 alert that comes back. Also sends a 0x04
+UNO Q-style audio-trigger event shortly after connecting, so this script
+exercises the audio observation window (arm_server.py's
+handle_audio_trigger/_run_observation_window), not just the video-only path.
 
 Usage:
     uv run python scripts/send_test_audio.py [image.jpg] [audio.wav]
@@ -16,6 +19,7 @@ messages are 0x03 + UTF-8 JSON).
 """
 
 import asyncio
+import datetime
 import json
 import sys
 import wave
@@ -54,6 +58,20 @@ async def sensor(audio: np.ndarray, jpeg: bytes):
     async with websockets.connect(SENSOR_URL, max_size=None) as ws:
         print(f"[sensor] connected to {SENSOR_URL}, streaming "
               f"{len(audio)/SR:.0f}s of audio + frames...")
+
+        # Simulate the UNO Q's 0x04 event (q-arduino/audio_classifier.py)
+        # instead of relying on raw 0x02 audio, which arm_server.py no
+        # longer treats as a trigger source.
+        when = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        trigger = json.dumps({
+            "event": "audio_elephant",
+            "confidence": 0.85,
+            "sound_type": "elephant_vocalization",
+            "timestamp": when,
+        }).encode()
+        await ws.send(b"\x04" + trigger)
+        print("[sensor] sent simulated 0x04 audio-trigger event")
+
         pos = 0
         while pos < len(audio):
             chunk = audio[pos:pos + CHUNK]

@@ -9,6 +9,7 @@ dependencies = [
     "ncnn>=1.0.20260526",
     "numpy>=2.5.1",
     "opencv-python>=5.0.0.93",
+    "python-dotenv>=1.0.1",
     "sounddevice>=0.5.5",
     "websockets>=16.1",
 ]

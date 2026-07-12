@@ -1,11 +1,19 @@
-"""Pipeline configuration with optional gaja.json overrides."""
+"""Pipeline configuration with optional gaja.json and .env overrides."""
 
 import dataclasses
 import json
 import logging
+import os
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
 log = logging.getLogger("gaja.config")
+
+# Loaded once at import time so every module that reads os.environ (e.g.
+# sarvam_workflow.py's SARVAM_API_KEY) sees .env values without needing its
+# own load_dotenv() call, as long as it imports gaja.config first.
+load_dotenv()
 
 
 @dataclass
@@ -29,6 +37,15 @@ class Config:
     confirm_confidence: float = 0.6
     # YOLO-triggered VLM verification (arm_server.py)
     vlm_poll_interval_s: float = 1.5
+    # Audio-triggered observation window (arm_server.py): after a UNO Q audio
+    # trigger, collect audio + YOLO evidence for this long before deciding;
+    # window_cooldown_s then blocks a new window so one ongoing event can't
+    # produce duplicate incidents.
+    audio_window_s: float = 13.0
+    window_cooldown_s: float = 60.0
+    # Languages sarvam_agent.py guarantees translate+TTS for on a confirmed
+    # incident, regardless of what the tool-calling agent decides on its own.
+    sarvam_languages: list = dataclasses.field(default_factory=lambda: ["hi", "ta"])
     # :8080 runs with a 32K context (docs/LOCAL_INFERENCE.md); kept low
     # because each turn's tool calls/results still add up even truncated.
     sarvam_agent_max_turns: int = 4
@@ -52,14 +69,36 @@ class Config:
             with open(path, encoding="utf-8") as f:
                 overrides = json.load(f)
         except FileNotFoundError:
-            return cfg
+            overrides = {}
         except (OSError, json.JSONDecodeError) as e:
             log.warning("Could not read %s (%s); using defaults", path, e)
-            return cfg
+            overrides = {}
         known = {f.name for f in dataclasses.fields(cls)}
         for key, value in overrides.items():
             if key in known:
                 setattr(cfg, key, value)
             else:
                 log.warning("Ignoring unknown config key %r in %s", key, path)
+        cfg._apply_env_overrides()
         return cfg
+
+    def _apply_env_overrides(self):
+        """GAJA_<FIELD> environment variables (e.g. from .env) win over
+        gaja.json — deployment-specific values (ports, LLM endpoints) live
+        per-machine and shouldn't require editing a committed file."""
+        for f in dataclasses.fields(self):
+            raw = os.environ.get(f"GAJA_{f.name.upper()}")
+            if raw is None:
+                continue
+            current = getattr(self, f.name)
+            try:
+                if isinstance(current, bool):
+                    setattr(self, f.name, raw.strip().lower() in ("1", "true", "yes", "on"))
+                elif isinstance(current, int):
+                    setattr(self, f.name, int(raw))
+                elif isinstance(current, float):
+                    setattr(self, f.name, float(raw))
+                else:
+                    setattr(self, f.name, raw)
+            except ValueError:
+                log.warning("Ignoring invalid GAJA_%s=%r", f.name.upper(), raw)

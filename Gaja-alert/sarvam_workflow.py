@@ -1,14 +1,21 @@
 import asyncio
+import logging
 import os
 import json
+
+from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Hardcoded fallback key (see e5fbd6f) — pulled out as a constant so
-# sarvam_agent.py can reuse the same value instead of duplicating the secret.
-# TODO: this is a live credential committed to the repo; rotate and move to
-# an untracked .env before this goes anywhere near a public remote.
-SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY", "sk_jb27svzp_3KP7k5AjVWsC5OkqAMFwyWLo")
+log = logging.getLogger("gaja.sarvam_workflow")
+
+load_dotenv()  # no-op if gaja.config already loaded it; safe when run standalone
+
+# Read from the environment (.env) only — sarvam_agent.py reuses this constant
+# instead of duplicating the lookup.
+SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY")
+if not SARVAM_API_KEY:
+    log.warning("SARVAM_API_KEY is not set (add it to .env) — Sarvam MCP calls will fail")
 
 
 async def run_sarvam_workflow(input_text: str):

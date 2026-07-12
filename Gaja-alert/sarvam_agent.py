@@ -68,9 +68,54 @@ def _mcp_tool_to_schema(tool) -> dict:
     }
 
 
+async def _ensure_guaranteed_translations(session, cfg, result: SarvamResult,
+                                           incident_text: str, audio_dir: str):
+    """Deterministic top-up, called after the tool-calling agent loop
+    finishes (however it finished): guarantees sarvam_translate + tts_speak
+    have actually run for every cfg.sarvam_languages entry, regardless of
+    whether the LLM chose to call them on its own. Uses the same MCP
+    session, so this is just extra tool calls, not a second connection."""
+    for lang in cfg.sarvam_languages:
+        lang = lang.lower()
+        if lang not in result.translations:
+            try:
+                log.info("Sarvam agent: guaranteeing translation for %r", lang)
+                call_result = await session.call_tool("sarvam_translate", {
+                    "text": incident_text,
+                    "target_language": lang,
+                    "source_language": "english",
+                })
+                result.translations[lang] = (
+                    call_result.content[0].text if call_result.content else "")
+            except Exception:
+                log.exception("Guaranteed sarvam_translate failed for %r", lang)
+                continue
+
+        if lang not in result.audio_files:
+            text_to_speak = result.translations.get(lang) or incident_text
+            audio_path = os.path.join(audio_dir, f"{lang}.wav")
+            try:
+                log.info("Sarvam agent: guaranteeing TTS for %r", lang)
+                await session.call_tool("sarvam_tts_speak", {
+                    "text": text_to_speak,
+                    "language": lang,
+                    "output_file": audio_path,
+                })
+                if os.path.isfile(audio_path):
+                    result.audio_files[lang] = os.path.relpath(
+                        audio_path, cfg.incidents_dir).replace(os.sep, "/")
+                else:
+                    log.warning("Guaranteed sarvam_tts_speak for %r reported ok but no file at %s",
+                                lang, audio_path)
+            except Exception:
+                log.exception("Guaranteed sarvam_tts_speak failed for %r", lang)
+
+
 async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> SarvamResult:
     """Connect to the Sarvam MCP server, hand its tools to the vision LLM,
-    and let the LLM decide which ones to call for this incident.
+    and let the LLM decide which ones to call for this incident. Whatever
+    the LLM decides, _ensure_guaranteed_translations then tops up any of
+    cfg.sarvam_languages it didn't cover, so translate+TTS always happen.
 
     `sarvam_tts_speak`'s own `output_file` argument is redirected (not its
     implementation) to incidents/<incident_id>/audio/<language>.wav so the
@@ -92,6 +137,7 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
             tool_defs = [_mcp_tool_to_schema(t) for t in tools_resp.tools]
             if not tool_defs:
                 log.warning("Sarvam agent: no MCP tools advertised")
+                await _ensure_guaranteed_translations(session, cfg, result, incident_text, audio_dir)
                 return result
 
             messages = [
@@ -103,12 +149,12 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
                 message = llm.chat_with_tools(cfg.vision_llm_base, messages, tool_defs)
                 if message is None:
                     log.error("Sarvam agent: LLM call failed on turn %d", turn)
-                    return result
+                    break
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     result.final_message = message.get("content") or ""
                     log.info("Sarvam agent done: %s", result.final_message)
-                    return result
+                    break
                 messages.append(message)
                 for call in tool_calls:
                     fn = call.get("function", {})
@@ -157,8 +203,10 @@ async def run_sarvam_agent(cfg, llm, incident_text: str, incident_id: str) -> Sa
                         "tool_call_id": call.get("id", name),
                         "content": history_text,
                     })
-            log.warning("Sarvam agent hit max turns (%d) without finishing",
-                        cfg.sarvam_agent_max_turns)
+            else:
+                log.warning("Sarvam agent hit max turns (%d) without finishing",
+                            cfg.sarvam_agent_max_turns)
+            await _ensure_guaranteed_translations(session, cfg, result, incident_text, audio_dir)
     return result
 
 
