@@ -2,7 +2,7 @@
 
 GajaAlert is an edge-based elephant early-warning system. It combines a field phone, an Arduino UNO Q edge gateway, an AI server, and Android alert receivers. The system can use audio and video evidence to confirm a sighting, record an incident, and broadcast an alert.
 
-This repository brings together five projects. Each remains in its own directory with its own setup and development workflow.
+The system has five components: the AI server, the edge gateway, audio-model training, and two Android apps. Each lives in its own directory with its own setup and development workflow.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ The components run on different devices and use different toolchains, so set up 
 
 Use the per-project READMEs for exact dependencies, device requirements, environment variables, build steps, and troubleshooting. Keep credentials such as `SARVAM_API_KEY` in local environment files; do not commit secrets.
 
-## Repository layout and history
+## Repository layout
 
 ```text
 GajaAlert/
@@ -80,5 +80,3 @@ GajaAlert/
 ├── q-mobile/                # sensor and receiver Android app
 └── notify/                  # dedicated receiver Android app
 ```
-
-The original projects' commit histories are retained in this repository, with their files rewritten under these directory prefixes. Source branches are also available under `imports/<project>/...` (for example, `imports/Gaja-alert/main`). The combined `main` branch contains the latest default-branch contents of all five projects.
